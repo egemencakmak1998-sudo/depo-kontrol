@@ -26,70 +26,103 @@ function extractCariIsim(text) {
   return match ? match[1].trim() : '';
 }
 
-function addProduct(map, ean, qty) {
-  ean = String(ean || '').trim();
-  qty = parseInt(qty, 10);
+function cleanName(name) {
+  return String(name || '')
+    .replace(/\s+/g, ' ')
+    .replace(/Sıra No Malzeme Kodu Malzeme Açıklaması Satır Açıklaması EAN Code Miktar Birim Fiyat Tutar/gi, '')
+    .trim();
+}
+
+function addProduct(map, product) {
+  const ean = String(product.ean || '').trim();
+  const qty = parseInt(product.beklenen, 10);
 
   if (!/^\d{13}$/.test(ean)) return;
   if (!qty || qty <= 0 || qty > 10000) return;
 
+  /*
+    Aynı EAN farklı regex stratejilerinden tekrar yakalanırsa toplama yapma.
+    Aksi halde 24 adet olan ürün 48 görünebilir.
+  */
   if (map.has(ean)) {
     const existing = map.get(ean);
-    existing.beklenen += qty;
+
+    if (!existing.urunAdi && product.urunAdi) {
+      existing.urunAdi = product.urunAdi;
+    }
+
+    if (!existing.malzemeKodu && product.malzemeKodu) {
+      existing.malzemeKodu = product.malzemeKodu;
+    }
+
     map.set(ean, existing);
-  } else {
-    map.set(ean, {
-      ean,
-      beklenen: qty,
-      malzemeKodu: '',
-      urunAdi: '',
-    });
+    return;
   }
+
+  map.set(ean, {
+    ean,
+    beklenen: qty,
+    malzemeKodu: product.malzemeKodu || '',
+    urunAdi: product.urunAdi || '',
+  });
 }
 
 function extractProducts(text) {
   const map = new Map();
 
   /*
-    1. yöntem:
-    Standart yapı:
-    4064666846736 12 Adet
+    PDF tablo satırlarını tek satıra yaklaştırıyoruz.
+    Ürün adı içinde 7/71, 5/0, 6/05 gibi boya kodları olsa bile bozmayacak.
   */
-  const p1 = /(\d{13})\s+(\d{1,5})\s+Adet\b/gi;
+  const compact = text
+    .replace(/\n/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-  let m;
+  /*
+    Ana strateji:
+    Sıra No + Malzeme Kodu + Ürün Adı + EAN + Miktar + Adet
 
-  while ((m = p1.exec(text)) !== null) {
-    addProduct(map, m[1], m[2]);
+    Örnek:
+    1 4401010-00078 Ct Deep Brown 7/71 4064666846736 12 Adet
+    2 4401010-00021 Ct Pure Natural 5/0 4064666900872 3 Adet
+  */
+  const rowPattern =
+    /(?:^|\s)(\d{1,3})\s+([0-9A-Z]{4,}-[0-9A-Z-]{3,})\s+(.{0,250}?)\s+(\d{13})\s+(\d{1,5})\s+Adet\b/gi;
+
+  let match;
+
+  while ((match = rowPattern.exec(compact)) !== null) {
+    const siraNo = parseInt(match[1], 10);
+
+    /*
+      İrsaliyede ürün sıraları genelde 1-999 arasıdır.
+      Header veya doküman numarası gibi şeyleri engellemek için kontrol.
+    */
+    if (!siraNo || siraNo < 1 || siraNo > 999) continue;
+
+    addProduct(map, {
+      malzemeKodu: match[2],
+      urunAdi: cleanName(match[3]),
+      ean: match[4],
+      beklenen: match[5],
+    });
   }
 
   /*
-    2. yöntem:
-    Bazı PDF parse çıktılarında EAN ile miktar arasında boşluk bozulabilir:
-    406466684673612 Adet
-    Bu durumda 13 haneli EAN + miktar yakalanır.
+    Fallback:
+    Ana strateji bazı satırları kaçırırsa sadece EAN + miktar + Adet yakala.
+    Ama burada da aynı EAN tekrar yakalanırsa toplama yapmıyoruz.
   */
-  const p2 = /(\d{13})(\d{1,5})\s+Adet\b/gi;
+  const eanQtyPattern = /(\d{13})\s+(\d{1,5})\s+Adet\b/gi;
 
-  while ((m = p2.exec(text)) !== null) {
-    addProduct(map, m[1], m[2]);
-  }
-
-  /*
-    3. yöntem:
-    En agresif fallback.
-    Her 13 haneli EAN'den sonra gelen 40 karakter içinde ilk miktar + Adet yapısını arar.
-  */
-  const eans = [...text.matchAll(/\d{13}/g)];
-
-  for (const e of eans) {
-    const ean = e[0];
-    const after = text.slice(e.index + 13, e.index + 80);
-    const qtyMatch = after.match(/^\s*(\d{1,5})\s*Adet\b/i) || after.match(/(\d{1,5})\s*Adet\b/i);
-
-    if (qtyMatch) {
-      addProduct(map, ean, qtyMatch[1]);
-    }
+  while ((match = eanQtyPattern.exec(text)) !== null) {
+    addProduct(map, {
+      ean: match[1],
+      beklenen: match[2],
+      malzemeKodu: '',
+      urunAdi: '',
+    });
   }
 
   return Array.from(map.values());
@@ -135,14 +168,10 @@ export default async function handler(req, res) {
       cariIsim,
       products,
       productCount: products.length,
-
-      /*
-        Debug için bırakıyorum.
-        Network response içinde bunu görürsen parser'ın PDF'ten ne okuduğunu anlayabiliriz.
-      */
       debug: {
         textLength: text.length,
         eanCount: [...text.matchAll(/\d{13}/g)].length,
+        productCount: products.length,
         preview: text.slice(0, 8000),
       },
     };
