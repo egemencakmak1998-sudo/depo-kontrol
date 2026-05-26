@@ -5,6 +5,7 @@ const pdfParse = require('pdf-parse');
 
 /*
   Ürün master dosyana göre geçerli EAN başlangıçları.
+  Hepsi 7 haneli prefix olarak tutuluyor.
 */
 const VALID_EAN_PREFIXES = [
   '4064666',
@@ -29,7 +30,9 @@ const PREFIX_GROUP = VALID_EAN_PREFIXES.join('|');
 
 function isValidProductEAN(ean) {
   const value = String(ean || '').trim();
+
   if (!/^\d{13}$/.test(value)) return false;
+
   return VALID_EAN_PREFIXES.some(prefix => value.startsWith(prefix));
 }
 
@@ -73,8 +76,9 @@ function addProduct(map, product) {
   if (!qty || qty <= 0 || qty > 10000) return;
 
   /*
-    EAN varsa EAN ile takip et.
-    EAN yoksa WLA4462 gibi ürün kodunu key olarak kullan.
+    KRİTİK:
+    EAN varsa valid EAN prefix filtresinden geçsin.
+    EAN yoksa WLA gibi malzeme kodlu ürünleri reddetme.
   */
   if (ean && !isValidProductEAN(ean)) return;
 
@@ -85,11 +89,10 @@ function addProduct(map, product) {
     const existing = map.get(key);
 
     /*
-      Aynı ürün irsaliyede iki kere varsa adetleri topla.
+      Aynı ürün irsaliyede birden fazla satırdaysa adetleri topla.
       Örn:
-      4064666579931 9 Adet
-      4064666579931 9 Adet
-      => 18 Adet
+      4064666579931 9 Adet + 4064666579931 9 Adet = 18 Adet
+      WLA4462 10 Adet + WLA4462 5 Adet = 15 Adet
     */
     existing.beklenen += qty;
 
@@ -176,19 +179,18 @@ function extractProducts(text) {
     }
 
     /*
-      2) EAN'siz ama ürün kodlu satırlar.
+      2) WLA kodlu EAN'siz ürünler.
       Örn:
       Wella Kraft Çanta WLA4462 34 Adet
-
-      Bu ürün manuel kontrol edilecek.
+      Wella Kraft Çanta WLA446234 Adet
     */
-    const codePattern = /\b([A-Z]{2,5}\d{2,8})\s+(\d{1,5})\s+Adet\b/i;
-    const codeMatch = afterMaterial.match(codePattern);
+    const wlaInRowPattern = /\b(WLA\d{2,8})\s*(\d{1,5})\s+Adet\b/i;
+    const wlaInRowMatch = afterMaterial.match(wlaInRowPattern);
 
-    if (codeMatch) {
-      const code = codeMatch[1];
-      const qty = codeMatch[2];
-      const namePart = afterMaterial.slice(0, codeMatch.index).trim();
+    if (wlaInRowMatch) {
+      const code = wlaInRowMatch[1];
+      const qty = wlaInRowMatch[2];
+      const namePart = afterMaterial.slice(0, wlaInRowMatch.index).trim();
 
       addProduct(map, {
         ean: '',
@@ -202,7 +204,7 @@ function extractProducts(text) {
   }
 
   /*
-    Fallback:
+    Fallback 1:
     Eğer satır bölme başarısız olursa EAN + adet üzerinden ürün yakala.
     Burada mevcut EAN varsa tekrar toplama yapmıyoruz; çünkü ana parser zaten topladı.
   */
@@ -224,24 +226,31 @@ function extractProducts(text) {
       });
     }
   }
-/*
-  WLA kodlu EAN'siz ürünler için global fallback.
-  Örnek:
-  Wella Kraft Çanta WLA4462 34 Adet
-*/
-const wlaPattern = /([A-ZÇĞİÖŞÜa-zçğıöşü0-9\s\-\/\.]{0,80}?)\b(WLA\d{2,8})\s*(\d{1,5})\s+Adet\b/gi;
-while ((m = wlaPattern.exec(compact)) !== null) {
-  const namePart = cleanName(m[1]);
-  const code = m[2];
-  const qty = m[3];
 
-  addProduct(map, {
-    ean: '',
-    beklenen: qty,
-    malzemeKodu: code,
-    urunAdi: namePart || code,
-  });
-}
+  /*
+    Fallback 2:
+    WLA kodlu EAN'siz ürünler için global fallback.
+    Bu blok row parsing kaçırsa bile WLA satırını ekler.
+
+    Örnek:
+    Wella Kraft Çanta WLA4462 34 Adet
+    Wella Kraft Çanta WLA446234 Adet
+  */
+  const wlaPattern = /([A-ZÇĞİÖŞÜa-zçğıöşü0-9\s\-\/\.]{0,80}?)\b(WLA\d{2,8})\s*(\d{1,5})\s+Adet\b/gi;
+
+  while ((m = wlaPattern.exec(compact)) !== null) {
+    const namePart = cleanName(m[1]);
+    const code = m[2];
+    const qty = m[3];
+
+    addProduct(map, {
+      ean: '',
+      beklenen: qty,
+      malzemeKodu: code,
+      urunAdi: namePart || code,
+    });
+  }
+
   return Array.from(map.values());
 }
 
@@ -288,6 +297,7 @@ export default async function handler(req, res) {
       debug: {
         textLength: text.length,
         eanCount: [...text.matchAll(/\d{13}/g)].filter(x => isValidProductEAN(x[0])).length,
+        wlaCount: [...text.matchAll(/WLA\d{2,8}/gi)].length,
         productCount: products.length,
         preview: text.slice(0, 8000),
       },
