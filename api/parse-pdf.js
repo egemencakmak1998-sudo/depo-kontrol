@@ -69,7 +69,10 @@ export default async function handler(req, res) {
               }
             }
 
-            products.push({ ean, beklenen: qty, urunAdi, malzemeKodu });
+            // Offset rakamları ürün adının sonuna ait (örn: 6/0 -> '6/' + '0')
+            const leadingDigits = digits.substring(0, offset);
+            const fullName = (urunAdi + leadingDigits).trim();
+            products.push({ ean, beklenen: qty, urunAdi: fullName, malzemeKodu });
             found = true;
             break;
           }
