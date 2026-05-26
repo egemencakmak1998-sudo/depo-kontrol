@@ -295,6 +295,7 @@ function ScanSession({ items, irsaliyeInfo, onDone, onBack }) {
   const { user, profile } = useAuth();
 
   const [counts, setCounts] = useState({});
+  const [scanHistory, setScanHistory] = useState([]);
   const [lastScan, setLastScan] = useState(null);
   const [mode, setMode] = useState('text');
   const [barInput, setBarInput] = useState('');
@@ -345,6 +346,40 @@ function ScanSession({ items, irsaliyeInfo, onDone, onBack }) {
     });
   }, []);
 
+  const undoLastScan = useCallback(() => {
+    setScanHistory(prevHistory => {
+      if (!prevHistory.length) {
+        toast$('Geri alınacak okutma yok', 'warning');
+        return prevHistory;
+      }
+
+      const last = prevHistory[prevHistory.length - 1];
+      const nextHistory = prevHistory.slice(0, -1);
+
+      setCounts(prevCounts => {
+        const current = prevCounts[last.key] || 0;
+        const newCount = Math.max(0, current - 1);
+
+        setLastScan({
+          code:last.code,
+          found:true,
+          item:last.item,
+          n:newCount,
+          expected:last.item.beklenen,
+        });
+
+        toast$(`↩️ Geri alındı: ${last.item.urunAdi || last.code} ${newCount}/${last.item.beklenen}`, 'info');
+
+        return {
+          ...prevCounts,
+          [last.key]: newCount,
+        };
+      });
+
+      return nextHistory;
+    });
+  }, [toast$]);
+
   const processScan = useCallback((code) => {
     const c = String(code).trim();
     if (!c) return;
@@ -360,7 +395,18 @@ function ScanSession({ items, irsaliyeInfo, onDone, onBack }) {
     const key = item.ean || item.malzemeKodu;
 
     setCounts(prev => {
-      const n = (prev[key] || 0) + 1;
+      const previousCount = prev[key] || 0;
+      const n = previousCount + 1;
+
+      setScanHistory(prevHistory => [
+        ...prevHistory,
+        {
+          key,
+          code:c,
+          item,
+          previousCount,
+        },
+      ]);
 
       if (n > item.beklenen) {
         toast$(`🔴 FAZLA: ${item.urunAdi || c} ${n}/${item.beklenen}`, 'error');
@@ -531,7 +577,7 @@ function ScanSession({ items, irsaliyeInfo, onDone, onBack }) {
         const key = item.ean || item.malzemeKodu;
 
         return {
-          ean:item.ean,
+          ean:item.ean || '',
           malzemeKodu:item.malzemeKodu || '',
           urunAdi:item.urunAdi || '',
           beklenen:item.beklenen,
@@ -651,6 +697,24 @@ function ScanSession({ items, irsaliyeInfo, onDone, onBack }) {
             />
           </div>
         </div>
+
+        <button
+          onClick={undoLastScan}
+          disabled={!scanHistory.length}
+          style={{
+            background:scanHistory.length ? '#f59e0b' : '#cbd5e1',
+            border:'none',
+            color:'#fff',
+            padding:'8px 10px',
+            borderRadius:10,
+            fontWeight:700,
+            fontSize:12,
+            cursor:scanHistory.length ? 'pointer' : 'not-allowed',
+            flexShrink:0,
+          }}
+        >
+          ↩️ Geri Al
+        </button>
 
         <button
           onClick={handleDone}
@@ -1173,50 +1237,46 @@ export default function SiparisKontrol({ navigate }) {
           beklenen:parseInt(String(p.beklenen || p.qty || 0).replace(/\D/g, ''), 10) || 0,
         }))
         .filter(p => (p.ean || p.malzemeKodu) && p.beklenen > 0);
+
       if (!prods.length) {
         throw new Error('PDF’den ürün çıkarılamadı');
       }
 
+      const pSnap = await getDocs(collection(db, 'products'));
       const pMap = {};
-const pCodeMap = {};
+      const pCodeMap = {};
 
-pSnap.docs.forEach(d => {
-  const p = d.data();
+      pSnap.docs.forEach(d => {
+        const p = d.data();
 
-  if (p.ean) {
-    pMap[String(p.ean).trim()] = p;
-  }
+        if (p.ean) {
+          pMap[String(p.ean).trim()] = p;
+        }
 
-  if (p.malzemeKodu) {
-    pCodeMap[String(p.malzemeKodu).trim()] = p;
-  }
+        if (p.malzemeKodu) {
+          pCodeMap[String(p.malzemeKodu).trim()] = p;
+        }
 
-  if (p.kod) {
-    pCodeMap[String(p.kod).trim()] = p;
-  }
-});
+        if (p.kod) {
+          pCodeMap[String(p.kod).trim()] = p;
+        }
+      });
 
-const enriched = prods.map(item => {
-  const eanKey = String(item.ean || '').trim();
-  const codeKey = String(item.malzemeKodu || '').trim();
+      const enriched = prods.map(item => {
+        const eanKey = String(item.ean || '').trim();
+        const codeKey = String(item.malzemeKodu || '').trim();
 
-  const matchedProduct =
-    pMap[eanKey] ||
-    pCodeMap[codeKey] ||
-    null;
+        const matchedProduct =
+          pMap[eanKey] ||
+          pCodeMap[codeKey] ||
+          null;
 
-  return {
-    ...item,
-    urunAdi: matchedProduct?.urunAdi || matchedProduct?.name || item.urunAdi || '',
-    malzemeKodu: matchedProduct?.malzemeKodu || matchedProduct?.kod || item.malzemeKodu || '',
-  };
-});
-
-      const enriched = prods.map(item => ({
-        ...item,
-        urunAdi:pMap[item.ean]?.urunAdi || item.urunAdi || '',
-        malzemeKodu:pMap[item.ean]?.malzemeKodu || item.malzemeKodu || '',
-      }));
+        return {
+          ...item,
+          urunAdi:matchedProduct?.urunAdi || matchedProduct?.name || item.urunAdi || '',
+          malzemeKodu:matchedProduct?.malzemeKodu || matchedProduct?.kod || item.malzemeKodu || '',
+        };
+      });
 
       setItems(enriched);
       setIrsal({
@@ -1294,7 +1354,7 @@ const enriched = prods.map(item => {
             urunAdi:cDesc >= 0 ? String(row[cDesc] ?? '').trim() : '',
             beklenen:parseInt(String(row[cQty]).replace(/\D/g, ''), 10) || 0,
           }))
-          .filter(r => r.ean && r.beklenen > 0);
+          .filter(r => (r.ean || r.malzemeKodu) && r.beklenen > 0);
 
         if (!parsed.length) {
           toast$('Geçerli ürün satırı bulunamadı!', 'error');
@@ -1415,6 +1475,7 @@ const enriched = prods.map(item => {
                 'Excel dosyası da desteklenir',
                 'Barkod kamerasıyla veya tabancayla okut',
                 'Manuel adet girebilir veya + / − ile düzenleyebilirsin',
+                'Yanlış okutmayı Geri Al butonuyla düzeltebilirsin',
                 'Tamamla → koli/palet bilgisi gir → kaydet',
               ].map((t, i) => (
                 <p
