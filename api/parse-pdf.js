@@ -3,6 +3,40 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse');
 
+/*
+  Ürün master dosyana göre geçerli EAN başlangıçları.
+  Böylece TCKN, belge no, tarih, telefon vb. 13 haneli sayılar ürün sanılmaz.
+*/
+const VALID_EAN_PREFIXES = [
+  // Çok sık geçen ana prefixler
+  '4064666',
+  '8005610',
+  '4068359',
+  '5056668',
+
+  // Az geçen ama gerçek ürün prefixleri
+  '5060829',
+  '5060777',
+  '5060356',
+  '5060760',
+  '4056800',
+  '3614228',
+  '5060703',
+  '5060569',
+  '3614227',
+  '4084500',
+  '3614226',
+  '3614229',
+];
+
+function isValidProductEAN(ean) {
+  const value = String(ean || '').trim();
+
+  if (!/^\d{13}$/.test(value)) return false;
+
+  return VALID_EAN_PREFIXES.some(prefix => value.startsWith(prefix));
+}
+
 function normalizeText(text) {
   return String(text || '')
     .replace(/\uFFFE/g, ' ')
@@ -37,11 +71,11 @@ function addProduct(map, product) {
   const ean = String(product.ean || '').trim();
   const qty = parseInt(product.beklenen, 10);
 
-  if (!/^\d{13}$/.test(ean)) return;
+  if (!isValidProductEAN(ean)) return;
   if (!qty || qty <= 0 || qty > 10000) return;
 
   /*
-    Aynı EAN farklı regex stratejilerinden tekrar yakalanırsa toplama yapma.
+    Aynı EAN farklı yakalama yöntemleriyle tekrar bulunursa adetleri toplama.
     Aksi halde 24 adet olan ürün 48 görünebilir.
   */
   if (map.has(ean)) {
@@ -72,7 +106,7 @@ function extractProducts(text) {
 
   /*
     PDF tablo satırlarını tek satıra yaklaştırıyoruz.
-    Ürün adı içinde 7/71, 5/0, 6/05 gibi boya kodları olsa bile bozmayacak.
+    Ürün adı içinde 7/71, 5/0, 6/05 gibi boya kodları olsa bile bozmaz.
   */
   const compact = text
     .replace(/\n/g, ' ')
@@ -95,10 +129,6 @@ function extractProducts(text) {
   while ((match = rowPattern.exec(compact)) !== null) {
     const siraNo = parseInt(match[1], 10);
 
-    /*
-      İrsaliyede ürün sıraları genelde 1-999 arasıdır.
-      Header veya doküman numarası gibi şeyleri engellemek için kontrol.
-    */
     if (!siraNo || siraNo < 1 || siraNo > 999) continue;
 
     addProduct(map, {
@@ -111,8 +141,8 @@ function extractProducts(text) {
 
   /*
     Fallback:
-    Ana strateji bazı satırları kaçırırsa sadece EAN + miktar + Adet yakala.
-    Ama burada da aynı EAN tekrar yakalanırsa toplama yapmıyoruz.
+    Satır yapısı bozulursa sadece EAN + miktar + Adet yakala.
+    Ürün adı sonra frontend tarafında Firebase products tablosundan tamamlanıyor.
   */
   const eanQtyPattern = /(\d{13})\s+(\d{1,5})\s+Adet\b/gi;
 
@@ -170,7 +200,7 @@ export default async function handler(req, res) {
       productCount: products.length,
       debug: {
         textLength: text.length,
-        eanCount: [...text.matchAll(/\d{13}/g)].length,
+        eanCount: [...text.matchAll(/\d{13}/g)].filter(m => isValidProductEAN(m[0])).length,
         productCount: products.length,
         preview: text.slice(0, 8000),
       },
@@ -178,6 +208,11 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       ...payload,
+
+      /*
+        Eski frontend formatıyla uyumluluk için bırakıldı.
+        Yeni SiparisKontrol.jsx direkt products alanını okur.
+      */
       content: [
         {
           type: 'text',
