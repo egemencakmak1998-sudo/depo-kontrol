@@ -360,13 +360,27 @@ export default function SiparisKontrol({ navigate }) {
       });
       if (!resp.ok) throw new Error('API hatası '+resp.status);
       const data = await resp.json();
-      const raw = data.content?.map(b=>b.text||'').join('').trim();
-      const clean = raw.replace(/```json|```/g,'').trim();
-      const parsed = JSON.parse(clean);
-      const prods = (parsed.products||[]).filter(p=>p.beklenen>0||p.qty>0).map((p,i)=>({
-        id:`p${i}`, ean:String(p.ean||'').trim(), malzemeKodu:String(p.malzemeKodu||p.code||'').trim(),
-        urunAdi:String(p.urunAdi||p.desc||'').trim(), beklenen:parseInt(p.beklenen||p.qty)||0,
-      })).filter(p=>p.beklenen>0);
+      if (data.error) throw new Error(data.error);
+
+      // API artık hem düz JSON ({products: [...]}) hem de eski Claude tipi
+      // ({content:[{text:'...'}]}) dönebilir. İkisini de güvenli oku.
+      let parsed = data;
+      if (!Array.isArray(parsed.products)) {
+        const raw = data.content?.map(b=>b.text||'').join('').trim() || '';
+        const clean = raw.replace(/```json|```/g,'').trim();
+        const jsonStart = clean.indexOf('{');
+        const jsonEnd = clean.lastIndexOf('}');
+        if (jsonStart < 0 || jsonEnd < 0) throw new Error('API JSON formatı okunamadı');
+        parsed = JSON.parse(clean.slice(jsonStart, jsonEnd + 1));
+      }
+
+      const prods = (parsed.products||[]).filter(p=>(p.beklenen||p.qty)>0).map((p,i)=>({
+        id:`p${i}`,
+        ean:String(p.ean||p.barkod||'').trim(),
+        malzemeKodu:String(p.malzemeKodu||p.code||'').trim(),
+        urunAdi:String(p.urunAdi||p.desc||'').trim(),
+        beklenen:parseInt(String(p.beklenen||p.qty||0).replace(/\D/g,''))||0,
+      })).filter(p=>p.ean && p.beklenen>0);
       if (!prods.length) throw new Error('PDF\'den ürün çıkarılamadı');
       // Firebase'den ürün adları ve malzeme kodları çek
       const pSnap = await getDocs(collection(db, 'products'));
