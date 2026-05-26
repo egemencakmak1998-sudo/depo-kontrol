@@ -5,7 +5,6 @@ const pdfParse = require('pdf-parse');
 
 /*
   Ürün master dosyana göre geçerli EAN başlangıçları.
-  Hepsi 7 haneli prefix olarak tutuluyor.
 */
 const VALID_EAN_PREFIXES = [
   '4064666',
@@ -30,9 +29,7 @@ const PREFIX_GROUP = VALID_EAN_PREFIXES.join('|');
 
 function isValidProductEAN(ean) {
   const value = String(ean || '').trim();
-
   if (!/^\d{13}$/.test(value)) return false;
-
   return VALID_EAN_PREFIXES.some(prefix => value.startsWith(prefix));
 }
 
@@ -59,37 +56,55 @@ function extractCariIsim(text) {
   return match ? match[1].trim() : '';
 }
 
+function cleanName(name) {
+  return String(name || '')
+    .replace(/\s+/g, ' ')
+    .replace(/Sıra No Malzeme Kodu Malzeme Açıklaması Satır Açıklaması EAN Code Miktar Birim Fiyat Tutar/gi, '')
+    .replace(/Toplam Tutar.*/gi, '')
+    .trim();
+}
+
 function addProduct(map, product) {
   const ean = String(product.ean || '').trim();
+  const malzemeKodu = String(product.malzemeKodu || '').trim();
+  const urunAdi = cleanName(product.urunAdi || '');
   const qty = parseInt(product.beklenen, 10);
 
-  if (!isValidProductEAN(ean)) return;
   if (!qty || qty <= 0 || qty > 10000) return;
 
   /*
-    Aynı EAN iki farklı yöntemle yakalanırsa adetleri toplama.
-    Aksi halde 24 olan ürün 48 görünebilir.
+    EAN varsa EAN ile takip et.
+    EAN yoksa WLA4462 gibi ürün kodunu key olarak kullan.
   */
-  if (map.has(ean)) {
-    const existing = map.get(ean);
+  if (ean && !isValidProductEAN(ean)) return;
 
-    if (!existing.urunAdi && product.urunAdi) {
-      existing.urunAdi = product.urunAdi;
-    }
+  const key = ean || malzemeKodu;
+  if (!key) return;
 
-    if (!existing.malzemeKodu && product.malzemeKodu) {
-      existing.malzemeKodu = product.malzemeKodu;
-    }
+  if (map.has(key)) {
+    const existing = map.get(key);
 
-    map.set(ean, existing);
+    /*
+      Aynı ürün irsaliyede iki kere varsa adetleri topla.
+      Örn:
+      4064666579931 9 Adet
+      4064666579931 9 Adet
+      => 18 Adet
+    */
+    existing.beklenen += qty;
+
+    if (!existing.urunAdi && urunAdi) existing.urunAdi = urunAdi;
+    if (!existing.malzemeKodu && malzemeKodu) existing.malzemeKodu = malzemeKodu;
+
+    map.set(key, existing);
     return;
   }
 
-  map.set(ean, {
+  map.set(key, {
     ean,
     beklenen: qty,
-    malzemeKodu: product.malzemeKodu || '',
-    urunAdi: product.urunAdi || '',
+    malzemeKodu,
+    urunAdi,
   });
 }
 
@@ -97,71 +112,117 @@ function extractProducts(text) {
   const map = new Map();
 
   /*
-    1. Yöntem:
-    Normal formatı yakalar:
-    4068359081183 24 Adet
+    PDF kolonları bazen birleşik geliyor:
+    14401010-00588Ultimate Repair Shampoo 250 ML406466657991718 Adet
+
+    Bu yüzden satırları ürün başlangıcına göre bölüyoruz:
+    SıraNo + 440....-..... malzeme kodu
   */
-  const spacedPattern = new RegExp(
-    `((?:${PREFIX_GROUP})\\d{6})\\s+(\\d{1,5})\\s+Adet\\b`,
-    'gi'
-  );
-
-  let match;
-
-  while ((match = spacedPattern.exec(text)) !== null) {
-    addProduct(map, {
-      ean: match[1],
-      beklenen: match[2],
-      malzemeKodu: '',
-      urunAdi: '',
-    });
-  }
-
-  /*
-    2. Yöntem:
-    PDF boşluğu silerse şu formatı yakalar:
-    406466684673612 Adet
-
-    Burada:
-    4064666846736 = 13 haneli EAN
-    12 = miktar
-  */
-  const compactPattern = new RegExp(
-    `((?:${PREFIX_GROUP})\\d{6})(\\d{1,5})\\s+Adet\\b`,
-    'gi'
-  );
-
-  while ((match = compactPattern.exec(text)) !== null) {
-    addProduct(map, {
-      ean: match[1],
-      beklenen: match[2],
-      malzemeKodu: '',
-      urunAdi: '',
-    });
-  }
-
-  /*
-    3. Yöntem:
-    Metni tek satıra indirip tekrar dener.
-    Bazı PDF'lerde satır kırılımları EAN ile adet arasına giriyor.
-  */
-  const compactText = text
+  const compact = text
     .replace(/\n/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
-  const compactTextPattern = new RegExp(
+  const rowStartPattern = /(?:^|\s)(\d{1,3})(440\d{4}-\d{5})/g;
+  const starts = [];
+  let m;
+
+  while ((m = rowStartPattern.exec(compact)) !== null) {
+    starts.push({
+      index: m.index,
+      full: m[0],
+      siraNo: parseInt(m[1], 10),
+      malzemeKodu: m[2],
+    });
+  }
+
+  for (let i = 0; i < starts.length; i++) {
+    const start = starts[i];
+    const end = starts[i + 1]?.index ?? compact.length;
+    const rowText = compact.slice(start.index, end).trim();
+
+    if (!start.siraNo || start.siraNo < 1 || start.siraNo > 999) continue;
+
+    const malzemeKodu = start.malzemeKodu;
+    const afterMaterial = rowText.slice(rowText.indexOf(malzemeKodu) + malzemeKodu.length).trim();
+
+    /*
+      1) EAN'li ürünler.
+      Hem boşluklu hem bitişik formatı yakalar:
+
+      4068359081183 18 Adet
+      40646665799319 Adet
+    */
+    const eanPattern = new RegExp(
+      `((?:${PREFIX_GROUP})\\d{6})\\s*(\\d{1,5})\\s+Adet\\b`,
+      'i'
+    );
+
+    const eanMatch = afterMaterial.match(eanPattern);
+
+    if (eanMatch) {
+      const ean = eanMatch[1];
+      const qty = eanMatch[2];
+      const namePart = afterMaterial.slice(0, eanMatch.index).trim();
+
+      addProduct(map, {
+        ean,
+        beklenen: qty,
+        malzemeKodu,
+        urunAdi: namePart,
+      });
+
+      continue;
+    }
+
+    /*
+      2) EAN'siz ama ürün kodlu satırlar.
+      Örn:
+      Wella Kraft Çanta WLA4462 34 Adet
+
+      Bu ürün manuel kontrol edilecek.
+    */
+    const codePattern = /\b([A-Z]{2,5}\d{2,8})\s+(\d{1,5})\s+Adet\b/i;
+    const codeMatch = afterMaterial.match(codePattern);
+
+    if (codeMatch) {
+      const code = codeMatch[1];
+      const qty = codeMatch[2];
+      const namePart = afterMaterial.slice(0, codeMatch.index).trim();
+
+      addProduct(map, {
+        ean: '',
+        beklenen: qty,
+        malzemeKodu: code,
+        urunAdi: namePart || code,
+      });
+
+      continue;
+    }
+  }
+
+  /*
+    Fallback:
+    Eğer satır bölme başarısız olursa EAN + adet üzerinden ürün yakala.
+    Burada mevcut EAN varsa tekrar toplama yapmıyoruz; çünkü ana parser zaten topladı.
+  */
+  const fallbackPattern = new RegExp(
     `((?:${PREFIX_GROUP})\\d{6})\\s*(\\d{1,5})\\s+Adet\\b`,
     'gi'
   );
 
-  while ((match = compactTextPattern.exec(compactText)) !== null) {
-    addProduct(map, {
-      ean: match[1],
-      beklenen: match[2],
-      malzemeKodu: '',
-      urunAdi: '',
-    });
+  while ((m = fallbackPattern.exec(compact)) !== null) {
+    const ean = m[1];
+    const qty = m[2];
+
+    if (!map.has(ean)) {
+      addProduct(map, {
+        ean,
+        beklenen: qty,
+        malzemeKodu: '',
+        urunAdi: '',
+      });
+    }
   }
 
   return Array.from(map.values());
@@ -209,7 +270,7 @@ export default async function handler(req, res) {
       productCount: products.length,
       debug: {
         textLength: text.length,
-        eanCount: [...text.matchAll(/\d{13}/g)].filter(m => isValidProductEAN(m[0])).length,
+        eanCount: [...text.matchAll(/\d{13}/g)].filter(x => isValidProductEAN(x[0])).length,
         productCount: products.length,
         preview: text.slice(0, 8000),
       },
