@@ -2,7 +2,6 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse');
 
-// EAN-13 checksum doğrulama
 function validateEAN13(ean) {
   if (!/^\d{13}$/.test(ean)) return false;
   const d = ean.split('').map(Number);
@@ -27,82 +26,61 @@ export default async function handler(req, res) {
 
     // İrsaliye No
     let irsaliyeNo = '';
-    const irsNoMatch = text.match(/İrsaliye No:([A-Z0-9]+)/);
-    if (irsNoMatch) irsaliyeNo = irsNoMatch[1];
+    const m1 = text.match(/İrsaliye No:([A-Z0-9]+)/);
+    if (m1) irsaliyeNo = m1[1];
 
     // Cari İsim
     let cariIsim = '';
-    const sayinMatch = text.match(/SAYIN\s*\n([^\n]+)/);
-    if (sayinMatch) cariIsim = sayinMatch[1].trim();
+    const m2 = text.match(/SAYIN\s*\n([^\n]+)/);
+    if (m2) cariIsim = m2[1].trim();
 
-    const products = [];
+    // Aynı EAN birden fazla kez gelirse adetleri birleştir
+    const eanMap = new Map(); // ean -> toplam adet
 
-    // Rakam dizisi + " Adet" → EAN (13 hane, checksum ile doğru olanı bul) + adet
-    // Açıklama sondaki rakamlar EAN'a yapışabiliyor, checksum ile doğru olanı buluyoruz
-    const digitPattern = /(\d{13,18})\s+Adet/g;
-    let match;
-    while ((match = digitPattern.exec(text)) !== null) {
-      const digits = match[1];
-      let found = false;
+    const addToMap = (ean, qty) => {
+      if (qty > 0 && qty < 10000) {
+        eanMap.set(ean, (eanMap.get(ean) || 0) + qty);
+      }
+    };
 
-      // Farklı offset'lerle EAN bulmayı dene (0-5 baştaki rakam atla)
+    // Strateji 1: EAN ve adet arasında boşluk var (ayrı hücreler)
+    const patternSpace = /(\d{13})\s+(\d{1,4})\s+Adet/g;
+    let m;
+    while ((m = patternSpace.exec(text)) !== null) {
+      const ean = m[1];
+      const qty = parseInt(m[2]);
+      if (validateEAN13(ean)) addToMap(ean, qty);
+    }
+
+    // Strateji 2: EAN ve adet birleşik (aralarında boşluk yok)
+    const patternMerged = /(\d{13,18})\s+Adet/g;
+    while ((m = patternMerged.exec(text)) !== null) {
+      const digits = m[1];
       for (let offset = 0; offset <= Math.min(5, digits.length - 14); offset++) {
         const ean = digits.substring(offset, offset + 13);
         const qtyStr = digits.substring(offset + 13);
         if (qtyStr.length >= 1 && qtyStr.length <= 4 && validateEAN13(ean)) {
           const qty = parseInt(qtyStr);
-          if (qty > 0 && qty < 10000) {
-            // Malzeme kodu
-            const before = text.substring(Math.max(0, match.index - 200), match.index);
-            const kodoMatches = before.match(/\d{7}-\d{5}/g);
-            const malzemeKodu = kodoMatches ? kodoMatches[kodoMatches.length - 1] : '';
-
-            // Ürün adı
-            let urunAdi = '';
-            if (malzemeKodu) {
-              const kIdx = before.lastIndexOf(malzemeKodu);
-              if (kIdx >= 0) {
-                urunAdi = before.substring(kIdx + malzemeKodu.length)
-                  .replace(/\s+/g, ' ').trim()
-                  .replace(/^\d+\s*/, '').trim()
-                  .substring(0, 50);
-              }
-            }
-
-            // Offset rakamları ürün adının sonuna ait (örn: 6/0 -> '6/' + '0')
-            const leadingDigits = digits.substring(0, offset);
-            const fullName = (urunAdi + leadingDigits).trim();
-            products.push({ ean, beklenen: qty, urunAdi: fullName, malzemeKodu });
-            found = true;
-            break;
-          }
+          // Strateji 1'de zaten eklendiyse çift sayma
+          if (!eanMap.has(ean)) addToMap(ean, qty);
+          break;
         }
       }
     }
 
     // WLA kodları (EAN-13 formatında değil)
-    const wlaPattern = /(WLA[A-Z0-9]{3,8})(\d{1,4})\s+Adet/g;
-    while ((match = wlaPattern.exec(text)) !== null) {
-      const ean = match[1];
-      const qty = parseInt(match[2]);
-      if (!ean || !qty) continue;
-      const before = text.substring(Math.max(0, match.index - 200), match.index);
-      const kodoMatches = before.match(/\d{7}-\d{5}/g);
-      const malzemeKodu = kodoMatches ? kodoMatches[kodoMatches.length - 1] : '';
-      let urunAdi = '';
-      if (malzemeKodu) {
-        const kIdx = before.lastIndexOf(malzemeKodu);
-        if (kIdx >= 0) {
-          urunAdi = before.substring(kIdx + malzemeKodu.length)
-            .replace(/\s+/g, ' ').trim().replace(/^\d+\s*/, '').trim().substring(0, 50);
-        }
-      }
-      products.push({ ean, beklenen: qty, urunAdi, malzemeKodu });
+    const patternWLA = /(WLA[A-Z0-9]{3,8})\s*(\d{1,4})\s+Adet/g;
+    while ((m = patternWLA.exec(text)) !== null) {
+      const ean = m[1];
+      const qty = parseInt(m[2]);
+      if (qty > 0 && qty < 10000) addToMap(ean, qty);
     }
 
-    const result = { irsaliyeNo, cariIsim, products };
+    // Map'ten ürün listesi oluştur
+    const products = [...eanMap.entries()].map(([ean, beklenen]) => ({ ean, beklenen }));
+
     res.status(200).json({
-      content: [{ type: 'text', text: JSON.stringify(result) }]
+      content: [{ type: 'text', text: JSON.stringify({ irsaliyeNo, cariIsim, products }) }]
     });
 
   } catch (e) {
