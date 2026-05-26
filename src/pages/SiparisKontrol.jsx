@@ -1172,8 +1172,7 @@ export default function SiparisKontrol({ navigate }) {
           urunAdi:String(p.urunAdi || p.desc || '').trim(),
           beklenen:parseInt(String(p.beklenen || p.qty || 0).replace(/\D/g, ''), 10) || 0,
         }))
-        .filter(p => p.ean && p.beklenen > 0);
-
+        .filter(p => (p.ean || p.malzemeKodu) && p.beklenen > 0);
       if (!prods.length) {
         throw new Error('PDF’den ürün çıkarılamadı');
       }
