@@ -3,10 +3,6 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse');
 
-/*
-  Ürün master dosyana göre geçerli EAN başlangıçları.
-  Hepsi 7 haneli prefix olarak tutuluyor.
-*/
 const VALID_EAN_PREFIXES = [
   '4064666',
   '8005610',
@@ -26,11 +22,6 @@ const VALID_EAN_PREFIXES = [
   '3614229',
 ];
 
-/*
-  EAN'i olmayan WLA kodlu ürünler.
-  PDF bazen "WLA4462 34 Adet" yerine "WLA446234 Adet" gibi bitişik okutur.
-  Bu liste sayesinde WLA kodu sabit tanınır ve adet doğru ayrılır.
-*/
 const WLA_PRODUCTS = {
   WLA4462: 'Wella Kraft Çanta',
   WLA4463: 'Ultimate Repair Kasa Önü Stand Step 4',
@@ -54,9 +45,7 @@ const PREFIX_GROUP = VALID_EAN_PREFIXES.join('|');
 
 function isValidProductEAN(ean) {
   const value = String(ean || '').trim();
-
   if (!/^\d{13}$/.test(value)) return false;
-
   return VALID_EAN_PREFIXES.some(prefix => value.startsWith(prefix));
 }
 
@@ -98,12 +87,6 @@ function addProduct(map, product) {
   const qty = parseInt(product.beklenen, 10);
 
   if (!qty || qty <= 0 || qty > 10000) return;
-
-  /*
-    KRİTİK:
-    EAN varsa valid EAN prefix filtresinden geçsin.
-    EAN yoksa WLA gibi malzeme kodlu ürünleri reddetme.
-  */
   if (ean && !isValidProductEAN(ean)) return;
 
   const key = ean || malzemeKodu;
@@ -111,13 +94,6 @@ function addProduct(map, product) {
 
   if (map.has(key)) {
     const existing = map.get(key);
-
-    /*
-      Aynı ürün irsaliyede birden fazla satırdaysa adetleri topla.
-      Örn:
-      4064666579931 9 Adet + 4064666579931 9 Adet = 18 Adet
-      WLA4462 10 Adet + WLA4462 5 Adet = 15 Adet
-    */
     existing.beklenen += qty;
 
     if (!existing.urunAdi && urunAdi) existing.urunAdi = urunAdi;
@@ -135,16 +111,44 @@ function addProduct(map, product) {
   });
 }
 
+function addWlaProductsFromText(map, compact) {
+  /*
+    WLA ürünlerini regex'e bırakmadan, listedeki her kodu direkt arar.
+    Örnek PDF parse çıktıları:
+    WLA4462 34 Adet
+    WLA446234 Adet
+    94401040-00636Wella Kraft ÇantaWLA446234 Adet
+  */
+  Object.entries(WLA_PRODUCTS).forEach(([code, productName]) => {
+    let searchFrom = 0;
+
+    while (true) {
+      const index = compact.indexOf(code, searchFrom);
+      if (index === -1) break;
+
+      const after = compact.slice(index + code.length, index + code.length + 40);
+
+      const qtyMatch =
+        after.match(/^\s*(\d{1,5})\s*Adet\b/i) ||
+        after.match(/^(\d{1,5})\s*Adet\b/i);
+
+      if (qtyMatch) {
+        addProduct(map, {
+          ean: '',
+          beklenen: qtyMatch[1],
+          malzemeKodu: code,
+          urunAdi: productName,
+        });
+      }
+
+      searchFrom = index + code.length;
+    }
+  });
+}
+
 function extractProducts(text) {
   const map = new Map();
 
-  /*
-    PDF kolonları bazen birleşik geliyor:
-    14401010-00588Ultimate Repair Shampoo 250 ML406466657991718 Adet
-
-    Bu yüzden satırları ürün başlangıcına göre bölüyoruz:
-    SıraNo + 440....-..... malzeme kodu
-  */
   const compact = text
     .replace(/\n/g, ' ')
     .replace(/\s+/g, ' ')
@@ -157,7 +161,6 @@ function extractProducts(text) {
   while ((m = rowStartPattern.exec(compact)) !== null) {
     starts.push({
       index: m.index,
-      full: m[0],
       siraNo: parseInt(m[1], 10),
       malzemeKodu: m[2],
     });
@@ -173,13 +176,6 @@ function extractProducts(text) {
     const malzemeKodu = start.malzemeKodu;
     const afterMaterial = rowText.slice(rowText.indexOf(malzemeKodu) + malzemeKodu.length).trim();
 
-    /*
-      1) EAN'li ürünler.
-      Hem boşluklu hem bitişik formatı yakalar:
-
-      4068359081183 18 Adet
-      40646665799319 Adet
-    */
     const eanPattern = new RegExp(
       `((?:${PREFIX_GROUP})\\d{6})\\s*(\\d{1,5})\\s+Adet\\b`,
       'i'
@@ -198,47 +194,9 @@ function extractProducts(text) {
         malzemeKodu,
         urunAdi: namePart,
       });
-
-      continue;
     }
-
-    /*
-      2) WLA kodlu EAN'siz ürünler.
-      WLA kodları 4 haneli sabit listeden tanınır.
-      Örn:
-      Wella Kraft Çanta WLA4462 34 Adet
-      Wella Kraft Çanta WLA446234 Adet
-    */
-    Object.entries(WLA_PRODUCTS).forEach(([code, productName]) => {
-      const escapedCode = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-      const patterns = [
-        new RegExp(`\\b${escapedCode}\\s+(\\d{1,5})\\s+Adet\\b`, 'i'),
-        new RegExp(`\\b${escapedCode}(\\d{1,5})\\s+Adet\\b`, 'i'),
-      ];
-
-      for (const pattern of patterns) {
-        const wlaMatch = afterMaterial.match(pattern);
-
-        if (wlaMatch) {
-          addProduct(map, {
-            ean: '',
-            beklenen: wlaMatch[1],
-            malzemeKodu: code,
-            urunAdi: productName,
-          });
-
-          break;
-        }
-      }
-    });
   }
 
-  /*
-    Fallback 1:
-    Eğer satır bölme başarısız olursa EAN + adet üzerinden ürün yakala.
-    Burada mevcut EAN varsa tekrar toplama yapmıyoruz; çünkü ana parser zaten topladı.
-  */
   const fallbackPattern = new RegExp(
     `((?:${PREFIX_GROUP})\\d{6})\\s*(\\d{1,5})\\s+Adet\\b`,
     'gi'
@@ -258,38 +216,7 @@ function extractProducts(text) {
     }
   }
 
-  /*
-    Fallback 2:
-    WLA kodlu EAN'siz ürünler için kesin global fallback.
-    Bu blok row parsing kaçırsa bile tanımlı WLA ürünlerini ekler.
-
-    Örnek:
-    WLA4462 34 Adet
-    WLA446234 Adet
-  */
-  Object.entries(WLA_PRODUCTS).forEach(([code, productName]) => {
-    const escapedCode = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-    const patterns = [
-      new RegExp(`\\b${escapedCode}\\s+(\\d{1,5})\\s+Adet\\b`, 'i'),
-      new RegExp(`\\b${escapedCode}(\\d{1,5})\\s+Adet\\b`, 'i'),
-    ];
-
-    for (const pattern of patterns) {
-      const match = compact.match(pattern);
-
-      if (match) {
-        addProduct(map, {
-          ean: '',
-          beklenen: match[1],
-          malzemeKodu: code,
-          urunAdi: productName,
-        });
-
-        break;
-      }
-    }
-  });
+  addWlaProductsFromText(map, compact);
 
   return Array.from(map.values());
 }
