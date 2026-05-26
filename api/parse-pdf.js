@@ -251,6 +251,24 @@ function extractProducts(text) {
     });
   }
 
+/*
+  En basit WLA fallback.
+  İsim yakalamaya çalışmaz, sadece WLA kodu + adet varsa kesin ekler.
+*/
+const simpleWlaPattern = /\b(WLA\d{2,8})\s*(\d{1,5})\s+Adet\b/gi;
+
+while ((m = simpleWlaPattern.exec(compact)) !== null) {
+  const code = m[1];
+  const qty = m[2];
+
+  addProduct(map, {
+    ean: '',
+    beklenen: qty,
+    malzemeKodu: code,
+    urunAdi: code,
+  });
+}
+  
   return Array.from(map.values());
 }
 
