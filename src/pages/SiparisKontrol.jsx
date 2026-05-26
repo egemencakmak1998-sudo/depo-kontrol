@@ -354,9 +354,24 @@ export default function SiparisKontrol({ navigate }) {
     try {
       const base64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=()=>rej(new Error('Okunamadı')); r.readAsDataURL(file); });
       setLoadMsg('Claude ürünleri çıkarıyor...');
-      const resp = await fetch('/api/parse-pdf', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-       body:JSON.stringify({ base64 })
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method:'POST',
+        headers:{
+          'Content-Type':'application/json',
+          'x-api-key': import.meta.env.VITE_ANTHROPIC_KEY,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body:JSON.stringify({
+          model:'claude-sonnet-4-20250514', max_tokens:2000,
+          messages:[{ role:'user', content:[
+            { type:'document', source:{ type:'base64', media_type:'application/pdf', data:base64 } },
+            { type:'text', text:`Bu irsaliye PDF'inden ürün listesini ve irsaliye bilgilerini çıkar.
+SADECE JSON formatında yanıt ver, başka hiçbir şey yazma:
+{"irsaliyeNo":"","cariIsim":"","products":[{"ean":"","malzemeKodu":"","urunAdi":"","beklenen":0}]}
+Miktar integer olmalı. EAN yoksa boş string bırak.` }
+          ]}]
+        })
       });
       if (!resp.ok) throw new Error('API hatası '+resp.status);
       const data = await resp.json();
