@@ -1177,13 +1177,40 @@ export default function SiparisKontrol({ navigate }) {
         throw new Error('PDF’den ürün çıkarılamadı');
       }
 
-      const pSnap = await getDocs(collection(db, 'products'));
       const pMap = {};
+const pCodeMap = {};
 
-      pSnap.docs.forEach(d => {
-        const p = d.data();
-        if (p.ean) pMap[p.ean] = p;
-      });
+pSnap.docs.forEach(d => {
+  const p = d.data();
+
+  if (p.ean) {
+    pMap[String(p.ean).trim()] = p;
+  }
+
+  if (p.malzemeKodu) {
+    pCodeMap[String(p.malzemeKodu).trim()] = p;
+  }
+
+  if (p.kod) {
+    pCodeMap[String(p.kod).trim()] = p;
+  }
+});
+
+const enriched = prods.map(item => {
+  const eanKey = String(item.ean || '').trim();
+  const codeKey = String(item.malzemeKodu || '').trim();
+
+  const matchedProduct =
+    pMap[eanKey] ||
+    pCodeMap[codeKey] ||
+    null;
+
+  return {
+    ...item,
+    urunAdi: matchedProduct?.urunAdi || matchedProduct?.name || item.urunAdi || '',
+    malzemeKodu: matchedProduct?.malzemeKodu || matchedProduct?.kod || item.malzemeKodu || '',
+  };
+});
 
       const enriched = prods.map(item => ({
         ...item,
