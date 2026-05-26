@@ -224,7 +224,24 @@ function extractProducts(text) {
       });
     }
   }
+/*
+  WLA kodlu EAN'siz ürünler için global fallback.
+  Örnek:
+  Wella Kraft Çanta WLA4462 34 Adet
+*/
+const wlaPattern = /([A-ZÇĞİÖŞÜa-zçğıöşü0-9\s\-\/\.]{0,80}?)\b(WLA\d{2,8})\s*(\d{1,5})\s+Adet\b/gi;
+while ((m = wlaPattern.exec(compact)) !== null) {
+  const namePart = cleanName(m[1]);
+  const code = m[2];
+  const qty = m[3];
 
+  addProduct(map, {
+    ean: '',
+    beklenen: qty,
+    malzemeKodu: code,
+    urunAdi: namePart || code,
+  });
+}
   return Array.from(map.values());
 }
 
