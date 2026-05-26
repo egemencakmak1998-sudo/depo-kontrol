@@ -5,16 +5,13 @@ const pdfParse = require('pdf-parse');
 
 /*
   Ürün master dosyana göre geçerli EAN başlangıçları.
-  Böylece TCKN, belge no, tarih, telefon vb. 13 haneli sayılar ürün sanılmaz.
+  Hepsi 7 haneli prefix olarak tutuluyor.
 */
 const VALID_EAN_PREFIXES = [
-  // Çok sık geçen ana prefixler
   '4064666',
   '8005610',
   '4068359',
   '5056668',
-
-  // Az geçen ama gerçek ürün prefixleri
   '5060829',
   '5060777',
   '5060356',
@@ -28,6 +25,8 @@ const VALID_EAN_PREFIXES = [
   '3614226',
   '3614229',
 ];
+
+const PREFIX_GROUP = VALID_EAN_PREFIXES.join('|');
 
 function isValidProductEAN(ean) {
   const value = String(ean || '').trim();
@@ -60,13 +59,6 @@ function extractCariIsim(text) {
   return match ? match[1].trim() : '';
 }
 
-function cleanName(name) {
-  return String(name || '')
-    .replace(/\s+/g, ' ')
-    .replace(/Sıra No Malzeme Kodu Malzeme Açıklaması Satır Açıklaması EAN Code Miktar Birim Fiyat Tutar/gi, '')
-    .trim();
-}
-
 function addProduct(map, product) {
   const ean = String(product.ean || '').trim();
   const qty = parseInt(product.beklenen, 10);
@@ -75,8 +67,8 @@ function addProduct(map, product) {
   if (!qty || qty <= 0 || qty > 10000) return;
 
   /*
-    Aynı EAN farklı yakalama yöntemleriyle tekrar bulunursa adetleri toplama.
-    Aksi halde 24 adet olan ürün 48 görünebilir.
+    Aynı EAN iki farklı yöntemle yakalanırsa adetleri toplama.
+    Aksi halde 24 olan ürün 48 görünebilir.
   */
   if (map.has(ean)) {
     const existing = map.get(ean);
@@ -105,48 +97,65 @@ function extractProducts(text) {
   const map = new Map();
 
   /*
-    PDF tablo satırlarını tek satıra yaklaştırıyoruz.
-    Ürün adı içinde 7/71, 5/0, 6/05 gibi boya kodları olsa bile bozmaz.
+    1. Yöntem:
+    Normal formatı yakalar:
+    4068359081183 24 Adet
   */
-  const compact = text
-    .replace(/\n/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  /*
-    Ana strateji:
-    Sıra No + Malzeme Kodu + Ürün Adı + EAN + Miktar + Adet
-
-    Örnek:
-    1 4401010-00078 Ct Deep Brown 7/71 4064666846736 12 Adet
-    2 4401010-00021 Ct Pure Natural 5/0 4064666900872 3 Adet
-  */
-  const rowPattern =
-    /(?:^|\s)(\d{1,3})\s+([0-9A-Z]{4,}-[0-9A-Z-]{3,})\s+(.{0,250}?)\s+(\d{13})\s+(\d{1,5})\s+Adet\b/gi;
+  const spacedPattern = new RegExp(
+    `((?:${PREFIX_GROUP})\\d{6})\\s+(\\d{1,5})\\s+Adet\\b`,
+    'gi'
+  );
 
   let match;
 
-  while ((match = rowPattern.exec(compact)) !== null) {
-    const siraNo = parseInt(match[1], 10);
-
-    if (!siraNo || siraNo < 1 || siraNo > 999) continue;
-
+  while ((match = spacedPattern.exec(text)) !== null) {
     addProduct(map, {
-      malzemeKodu: match[2],
-      urunAdi: cleanName(match[3]),
-      ean: match[4],
-      beklenen: match[5],
+      ean: match[1],
+      beklenen: match[2],
+      malzemeKodu: '',
+      urunAdi: '',
     });
   }
 
   /*
-    Fallback:
-    Satır yapısı bozulursa sadece EAN + miktar + Adet yakala.
-    Ürün adı sonra frontend tarafında Firebase products tablosundan tamamlanıyor.
-  */
-  const eanQtyPattern = /(\d{13})\s+(\d{1,5})\s+Adet\b/gi;
+    2. Yöntem:
+    PDF boşluğu silerse şu formatı yakalar:
+    406466684673612 Adet
 
-  while ((match = eanQtyPattern.exec(text)) !== null) {
+    Burada:
+    4064666846736 = 13 haneli EAN
+    12 = miktar
+  */
+  const compactPattern = new RegExp(
+    `((?:${PREFIX_GROUP})\\d{6})(\\d{1,5})\\s+Adet\\b`,
+    'gi'
+  );
+
+  while ((match = compactPattern.exec(text)) !== null) {
+    addProduct(map, {
+      ean: match[1],
+      beklenen: match[2],
+      malzemeKodu: '',
+      urunAdi: '',
+    });
+  }
+
+  /*
+    3. Yöntem:
+    Metni tek satıra indirip tekrar dener.
+    Bazı PDF'lerde satır kırılımları EAN ile adet arasına giriyor.
+  */
+  const compactText = text
+    .replace(/\n/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const compactTextPattern = new RegExp(
+    `((?:${PREFIX_GROUP})\\d{6})\\s*(\\d{1,5})\\s+Adet\\b`,
+    'gi'
+  );
+
+  while ((match = compactTextPattern.exec(compactText)) !== null) {
     addProduct(map, {
       ean: match[1],
       beklenen: match[2],
@@ -208,11 +217,6 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       ...payload,
-
-      /*
-        Eski frontend formatıyla uyumluluk için bırakıldı.
-        Yeni SiparisKontrol.jsx direkt products alanını okur.
-      */
       content: [
         {
           type: 'text',
