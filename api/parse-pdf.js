@@ -1,6 +1,4 @@
-from pathlib import Path
-
-content = r"""import { createRequire } from 'module';
+import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse');
@@ -362,8 +360,3 @@ export default async function handler(req, res) {
     });
   }
 }
-"""
-
-path = Path("/mnt/data/parse-pdf.js.txt")
-path.write_text(content, encoding="utf-8")
-print(str(path))
