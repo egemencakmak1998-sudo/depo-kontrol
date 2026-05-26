@@ -26,38 +26,69 @@ function extractCariIsim(text) {
   return match ? match[1].trim() : '';
 }
 
+function addProduct(map, ean, qty) {
+  ean = String(ean || '').trim();
+  qty = parseInt(qty, 10);
+
+  if (!/^\d{13}$/.test(ean)) return;
+  if (!qty || qty <= 0 || qty > 10000) return;
+
+  if (map.has(ean)) {
+    const existing = map.get(ean);
+    existing.beklenen += qty;
+    map.set(ean, existing);
+  } else {
+    map.set(ean, {
+      ean,
+      beklenen: qty,
+      malzemeKodu: '',
+      urunAdi: '',
+    });
+  }
+}
+
 function extractProducts(text) {
   const map = new Map();
 
   /*
-    Bu parser özellikle Elis irsaliye formatı için güvenli çalışır.
-    PDF içinde görünen:
+    1. yöntem:
+    Standart yapı:
     4064666846736 12 Adet
-    4064666900872 3 Adet
-    gibi tüm EAN + miktar eşleşmelerini yakalar.
   */
+  const p1 = /(\d{13})\s+(\d{1,5})\s+Adet\b/gi;
 
-  const pattern = /(\d{13})\s+(\d{1,5})\s+Adet\b/gi;
+  let m;
 
-  let match;
+  while ((m = p1.exec(text)) !== null) {
+    addProduct(map, m[1], m[2]);
+  }
 
-  while ((match = pattern.exec(text)) !== null) {
-    const ean = String(match[1]).trim();
-    const qty = parseInt(match[2], 10);
+  /*
+    2. yöntem:
+    Bazı PDF parse çıktılarında EAN ile miktar arasında boşluk bozulabilir:
+    406466684673612 Adet
+    Bu durumda 13 haneli EAN + miktar yakalanır.
+  */
+  const p2 = /(\d{13})(\d{1,5})\s+Adet\b/gi;
 
-    if (!ean || !qty || qty <= 0 || qty > 10000) continue;
+  while ((m = p2.exec(text)) !== null) {
+    addProduct(map, m[1], m[2]);
+  }
 
-    if (map.has(ean)) {
-      const existing = map.get(ean);
-      existing.beklenen += qty;
-      map.set(ean, existing);
-    } else {
-      map.set(ean, {
-        ean,
-        beklenen: qty,
-        malzemeKodu: '',
-        urunAdi: '',
-      });
+  /*
+    3. yöntem:
+    En agresif fallback.
+    Her 13 haneli EAN'den sonra gelen 40 karakter içinde ilk miktar + Adet yapısını arar.
+  */
+  const eans = [...text.matchAll(/\d{13}/g)];
+
+  for (const e of eans) {
+    const ean = e[0];
+    const after = text.slice(e.index + 13, e.index + 80);
+    const qtyMatch = after.match(/^\s*(\d{1,5})\s*Adet\b/i) || after.match(/(\d{1,5})\s*Adet\b/i);
+
+    if (qtyMatch) {
+      addProduct(map, ean, qtyMatch[1]);
     }
   }
 
@@ -104,13 +135,20 @@ export default async function handler(req, res) {
       cariIsim,
       products,
       productCount: products.length,
-      rawTextPreview: text.slice(0, 5000),
+
+      /*
+        Debug için bırakıyorum.
+        Network response içinde bunu görürsen parser'ın PDF'ten ne okuduğunu anlayabiliriz.
+      */
+      debug: {
+        textLength: text.length,
+        eanCount: [...text.matchAll(/\d{13}/g)].length,
+        preview: text.slice(0, 8000),
+      },
     };
 
     return res.status(200).json({
       ...payload,
-
-      // Eski frontend yapısıyla uyumluluk için bırakıldı
       content: [
         {
           type: 'text',
