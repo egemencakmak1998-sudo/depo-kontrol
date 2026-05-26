@@ -255,7 +255,7 @@ function extractProducts(text) {
   En basit WLA fallback.
   İsim yakalamaya çalışmaz, sadece WLA kodu + adet varsa kesin ekler.
 */
-const simpleWlaPattern = /\b(WLA\d{2,8})\s*(\d{1,5})\s+Adet\b/gi;
+const simpleWlaPattern = /\b(WLA\d{4})\s*(\d{1,5})\s+Adet\b/gi;
 
 while ((m = simpleWlaPattern.exec(compact)) !== null) {
   const code = m[1];
