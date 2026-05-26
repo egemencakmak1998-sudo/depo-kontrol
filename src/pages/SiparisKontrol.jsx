@@ -368,10 +368,19 @@ export default function SiparisKontrol({ navigate }) {
         urunAdi:String(p.urunAdi||p.desc||'').trim(), beklenen:parseInt(p.beklenen||p.qty)||0,
       })).filter(p=>p.beklenen>0);
       if (!prods.length) throw new Error('PDF\'den ürün çıkarılamadı');
-      setItems(prods);
+      // Firebase'den ürün adları ve malzeme kodları çek
+      const pSnap = await getDocs(collection(db, 'products'));
+      const pMap = {};
+      pSnap.docs.forEach(d => { const p = d.data(); if (p.ean) pMap[p.ean] = p; });
+      const enriched = prods.map(item => ({
+        ...item,
+        urunAdi: pMap[item.ean]?.urunAdi || item.urunAdi || '',
+        malzemeKodu: pMap[item.ean]?.malzemeKodu || item.malzemeKodu || '',
+      }));
+      setItems(enriched);
       setIrsal({ irsaliyeNo:parsed.irsaliyeNo||'', cariIsim:parsed.cariIsim||'' });
       setView('scan');
-      toast$(`${prods.length} ürün yüklendi ✓`,'success');
+      toast$(`${enriched.length} ürün yüklendi ✓`,'success');
     } catch(e) { toast$('Hata: '+e.message,'error'); }
     finally { setLoading(false); setLoadMsg(''); }
   };
