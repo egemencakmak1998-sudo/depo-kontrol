@@ -1,4 +1,6 @@
-import { createRequire } from 'module';
+from pathlib import Path
+
+content = r"""import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse');
@@ -25,6 +27,30 @@ const VALID_EAN_PREFIXES = [
   '3614226',
   '3614229',
 ];
+
+/*
+  EAN'i olmayan WLA kodlu ürünler.
+  PDF bazen "WLA4462 34 Adet" yerine "WLA446234 Adet" gibi bitişik okutur.
+  Bu liste sayesinde WLA kodu sabit tanınır ve adet doğru ayrılır.
+*/
+const WLA_PRODUCTS = {
+  WLA4462: 'Wella Kraft Çanta',
+  WLA4463: 'Ultimate Repair Kasa Önü Stand Step 4',
+  WLA4464: 'Ultimate Repair Kasa Önü Stand Step 5',
+  WLA4458: 'Wella Siyah Havlu (50*90) (System.Man)',
+  WLA4461: 'Wella Kırmızı Karton Çanta (24*17)',
+  WLA4459: 'Wella Kırmızı Havlu (50*90)',
+  WLA4460: 'Wella Beyaz Havlu (50*90)',
+  WLA4465: 'Ultimate Repair Servis Menüsü Step 4',
+  WLA4468: 'Fiyat Listesi Kılıfı',
+  WLA4489: 'Wella Siyah Penuar',
+  WLA4470: 'Wella Siyah Önlük',
+  WLA4469: 'Ultimate Repair Ayaklı Görsel 70X90',
+  WLA4466: 'Ultimate Repair Kullanım Kılavuzu Step 4',
+  WLA4491: 'Smoothfiller Servis Menüsü',
+  WLA4492: 'Smoothfiller Küçük Ayaklı Görsel',
+  WLA4493: 'Smoothfiller Teknik Kılavuz Kitapçık',
+};
 
 const PREFIX_GROUP = VALID_EAN_PREFIXES.join('|');
 
@@ -180,27 +206,34 @@ function extractProducts(text) {
 
     /*
       2) WLA kodlu EAN'siz ürünler.
+      WLA kodları 4 haneli sabit listeden tanınır.
       Örn:
       Wella Kraft Çanta WLA4462 34 Adet
       Wella Kraft Çanta WLA446234 Adet
     */
-    const wlaInRowPattern = /\b(WLA\d{4})\s*(\d{1,5})\s+Adet\b/i;
-    const wlaInRowMatch = afterMaterial.match(wlaInRowPattern);
+    Object.entries(WLA_PRODUCTS).forEach(([code, productName]) => {
+      const escapedCode = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-    if (wlaInRowMatch) {
-      const code = wlaInRowMatch[1];
-      const qty = wlaInRowMatch[2];
-      const namePart = afterMaterial.slice(0, wlaInRowMatch.index).trim();
+      const patterns = [
+        new RegExp(`\\b${escapedCode}\\s+(\\d{1,5})\\s+Adet\\b`, 'i'),
+        new RegExp(`\\b${escapedCode}(\\d{1,5})\\s+Adet\\b`, 'i'),
+      ];
 
-      addProduct(map, {
-        ean: '',
-        beklenen: qty,
-        malzemeKodu: code,
-        urunAdi: namePart || code,
-      });
+      for (const pattern of patterns) {
+        const wlaMatch = afterMaterial.match(pattern);
 
-      continue;
-    }
+        if (wlaMatch) {
+          addProduct(map, {
+            ean: '',
+            beklenen: wlaMatch[1],
+            malzemeKodu: code,
+            urunAdi: productName,
+          });
+
+          break;
+        }
+      }
+    });
   }
 
   /*
@@ -229,46 +262,37 @@ function extractProducts(text) {
 
   /*
     Fallback 2:
-    WLA kodlu EAN'siz ürünler için global fallback.
-    Bu blok row parsing kaçırsa bile WLA satırını ekler.
+    WLA kodlu EAN'siz ürünler için kesin global fallback.
+    Bu blok row parsing kaçırsa bile tanımlı WLA ürünlerini ekler.
 
     Örnek:
-    Wella Kraft Çanta WLA4462 34 Adet
-    Wella Kraft Çanta WLA446234 Adet
+    WLA4462 34 Adet
+    WLA446234 Adet
   */
-  const wlaPattern = /([A-ZÇĞİÖŞÜa-zçğıöşü0-9\s\-\/\.]{0,80}?)\b(WLA\d{4})\s*(\d{1,5})\s+Adet\b/gi;
+  Object.entries(WLA_PRODUCTS).forEach(([code, productName]) => {
+    const escapedCode = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-  while ((m = wlaPattern.exec(compact)) !== null) {
-    const namePart = cleanName(m[1]);
-    const code = m[2];
-    const qty = m[3];
+    const patterns = [
+      new RegExp(`\\b${escapedCode}\\s+(\\d{1,5})\\s+Adet\\b`, 'i'),
+      new RegExp(`\\b${escapedCode}(\\d{1,5})\\s+Adet\\b`, 'i'),
+    ];
 
-    addProduct(map, {
-      ean: '',
-      beklenen: qty,
-      malzemeKodu: code,
-      urunAdi: namePart || code,
-    });
-  }
+    for (const pattern of patterns) {
+      const match = compact.match(pattern);
 
-/*
-  En basit WLA fallback.
-  İsim yakalamaya çalışmaz, sadece WLA kodu + adet varsa kesin ekler.
-*/
-const simpleWlaPattern = /\b(WLA\d{4})\s*(\d{1,5})\s+Adet\b/gi;
+      if (match) {
+        addProduct(map, {
+          ean: '',
+          beklenen: match[1],
+          malzemeKodu: code,
+          urunAdi: productName,
+        });
 
-while ((m = simpleWlaPattern.exec(compact)) !== null) {
-  const code = m[1];
-  const qty = m[2];
-
-  addProduct(map, {
-    ean: '',
-    beklenen: qty,
-    malzemeKodu: code,
-    urunAdi: code,
+        break;
+      }
+    }
   });
-}
-  
+
   return Array.from(map.values());
 }
 
@@ -338,3 +362,8 @@ export default async function handler(req, res) {
     });
   }
 }
+"""
+
+path = Path("/mnt/data/parse-pdf.js.txt")
+path.write_text(content, encoding="utf-8")
+print(str(path))
