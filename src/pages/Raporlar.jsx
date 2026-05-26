@@ -60,7 +60,9 @@ function KargoImportModal({ onDone, onClose }) {
   const parsePDF = async (file) => {
     try {
       const base64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(',')[1]);r.onerror=()=>rej(new Error('Okunamadı'));r.readAsDataURL(file);});
-      const resp=await fetch('/api/parse-pdf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({base64,prompt:`Bu kargo listesinden tüm satırları çıkar. SADECE JSON formatında: {"rows":[{"irsaliyeNo":"","cariIsim":"","takipNo":"","tarih":""}]} Boş alanlar için boş string.`})});
+      const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':import.meta.env.VITE_ANTHROPIC_KEY,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:2000,messages:[{role:'user',content:[{type:'document',source:{type:'base64',media_type:'application/pdf',data:base64}},{type:'text',text:'Bu kargo listesinden tüm satırları çıkar. SADECE JSON formatında: {"rows":[{"irsaliyeNo":"","cariIsim":"","takipNo":"","tarih":""}]} Boş alanlar için boş string.'}]}]})});
+      if(!resp.ok) throw new Error('API '+resp.status);
+      const data=await resp.json();
       const raw=data.content?.map(b=>b.text||'').join('').trim().replace(/```json|```/g,'').trim();
       const parsed=JSON.parse(raw);
       setRows(parsed.rows||[]);
