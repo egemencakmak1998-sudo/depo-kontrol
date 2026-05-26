@@ -1,4 +1,6 @@
-import pdfParse from 'pdf-parse/lib/pdf-parse.js';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const pdfParse = require('pdf-parse');
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -15,53 +17,44 @@ export default async function handler(req, res) {
     const data = await pdfParse(buffer);
     const text = data.text;
 
-    // Parse irsaliye bilgileri
     let irsaliyeNo = '';
-    let cariIsim = '';
-
-    // İrsaliye numarası
     const irsaliyeMatch = text.match(/ELI\d{16}/);
     if (irsaliyeMatch) irsaliyeNo = irsaliyeMatch[0];
 
-    // Cari isim - SAYIN'dan sonraki satır
+    let cariIsim = '';
     const sayinMatch = text.match(/SAYIN\s*\n([^\n]+)/);
     if (sayinMatch) cariIsim = sayinMatch[1].trim();
 
-    // Ürünleri çıkar: EAN kodu + miktar + Adet
     const products = [];
     const pattern = /(\d{10,14}|WLA\w+)\s+(\d+)\s+Adet/g;
     let match;
-
     while ((match = pattern.exec(text)) !== null) {
       const ean = match[1];
       const qty = parseInt(match[2]);
       if (!ean || !qty) continue;
 
-      // Malzeme kodu (XXXXXXX-XXXXX formatı)
-      const before = text.substring(Math.max(0, match.index - 200), match.index);
-      const kodoMatch = before.match(/(\d{7}-\d{5})\s+/g);
-      const malzemeKodu = kodoMatch ? kodoMatch[kodoMatch.length - 1].trim() : '';
+      const before = text.substring(Math.max(0, match.index - 300), match.index);
+      const kodoMatches = before.match(/\d{7}-\d{5}/g);
+      const malzemeKodu = kodoMatches ? kodoMatches[kodoMatches.length - 1] : '';
 
-      // Ürün adı
       let urunAdi = '';
       if (malzemeKodu) {
         const kIdx = before.lastIndexOf(malzemeKodu);
         if (kIdx >= 0) {
-          urunAdi = before.substring(kIdx + malzemeKodu.length).replace(/\s+/g, ' ').trim();
-          urunAdi = urunAdi.replace(/\d{7}-\d{5}/g, '').trim().substring(0, 60);
+          urunAdi = before.substring(kIdx + malzemeKodu.length)
+            .replace(/\s+/g, ' ').trim().substring(0, 60);
         }
       }
 
       products.push({ ean, beklenen: qty, urunAdi, malzemeKodu });
     }
 
-    // Frontend'in beklediği format
     const result = { irsaliyeNo, cariIsim, products };
     res.status(200).json({
       content: [{ type: 'text', text: JSON.stringify(result) }]
     });
 
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 200) });
   }
 }
