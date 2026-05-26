@@ -1,3 +1,5 @@
+import pdfParse from 'pdf-parse/lib/pdf-parse.js';
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -5,40 +7,60 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { base64, prompt } = req.body;
+  const { base64 } = req.body;
   if (!base64) return res.status(400).json({ error: 'base64 gerekli' });
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-3-haiku-20240307',
-        max_tokens: 2000,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
-            { type: 'text', text: prompt || `Bu irsaliye PDF'inden ürün listesini ve irsaliye bilgilerini çıkar.
-SADECE JSON formatında yanıt ver, başka hiçbir şey yazma:
-{"irsaliyeNo":"","cariIsim":"","products":[{"ean":"","malzemeKodu":"","urunAdi":"","beklenen":0}]}
-Miktar integer olmalı. EAN yoksa boş string bırak.` }
-          ]
-        }]
-      })
-    });
+    const buffer = Buffer.from(base64, 'base64');
+    const data = await pdfParse(buffer);
+    const text = data.text;
 
-    if (!response.ok) {
-      const err = await response.text();
-      return res.status(response.status).json({ error: err });
+    // Parse irsaliye bilgileri
+    let irsaliyeNo = '';
+    let cariIsim = '';
+
+    // İrsaliye numarası
+    const irsaliyeMatch = text.match(/ELI\d{16}/);
+    if (irsaliyeMatch) irsaliyeNo = irsaliyeMatch[0];
+
+    // Cari isim - SAYIN'dan sonraki satır
+    const sayinMatch = text.match(/SAYIN\s*\n([^\n]+)/);
+    if (sayinMatch) cariIsim = sayinMatch[1].trim();
+
+    // Ürünleri çıkar: EAN kodu + miktar + Adet
+    const products = [];
+    const pattern = /(\d{10,14}|WLA\w+)\s+(\d+)\s+Adet/g;
+    let match;
+
+    while ((match = pattern.exec(text)) !== null) {
+      const ean = match[1];
+      const qty = parseInt(match[2]);
+      if (!ean || !qty) continue;
+
+      // Malzeme kodu (XXXXXXX-XXXXX formatı)
+      const before = text.substring(Math.max(0, match.index - 200), match.index);
+      const kodoMatch = before.match(/(\d{7}-\d{5})\s+/g);
+      const malzemeKodu = kodoMatch ? kodoMatch[kodoMatch.length - 1].trim() : '';
+
+      // Ürün adı
+      let urunAdi = '';
+      if (malzemeKodu) {
+        const kIdx = before.lastIndexOf(malzemeKodu);
+        if (kIdx >= 0) {
+          urunAdi = before.substring(kIdx + malzemeKodu.length).replace(/\s+/g, ' ').trim();
+          urunAdi = urunAdi.replace(/\d{7}-\d{5}/g, '').trim().substring(0, 60);
+        }
+      }
+
+      products.push({ ean, beklenen: qty, urunAdi, malzemeKodu });
     }
 
-    const data = await response.json();
-    res.status(200).json(data);
+    // Frontend'in beklediği format
+    const result = { irsaliyeNo, cariIsim, products };
+    res.status(200).json({
+      content: [{ type: 'text', text: JSON.stringify(result) }]
+    });
+
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
