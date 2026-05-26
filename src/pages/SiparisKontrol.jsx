@@ -98,9 +98,11 @@ function ScanSession({ items, irsaliyeInfo, onDone, onBack }) {
   const detectorRef = useRef(null);
   const rafRef = useRef(null);
   const lastBcRef = useRef({ code:'', ts:0 });
-  const inputRef = useRef(null);
-  const itemsRef = useRef(items);
-  const scanFnRef = useRef(null);
+const lockedBarcodeRef = useRef('');
+const noBarcodeFrameRef = useRef(0);
+const inputRef = useRef(null);
+const itemsRef = useRef(items);
+const scanFnRef = useRef(null);
 
   useEffect(()=>{ itemsRef.current = items; },[items]);
 
