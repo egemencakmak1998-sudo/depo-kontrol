@@ -184,7 +184,7 @@ function extractProducts(text) {
       Wella Kraft Çanta WLA4462 34 Adet
       Wella Kraft Çanta WLA446234 Adet
     */
-    const wlaInRowPattern = /\b(WLA\d{2,8})\s*(\d{1,5})\s+Adet\b/i;
+    const wlaInRowPattern = /\b(WLA\d{4})\s*(\d{1,5})\s+Adet\b/i;
     const wlaInRowMatch = afterMaterial.match(wlaInRowPattern);
 
     if (wlaInRowMatch) {
