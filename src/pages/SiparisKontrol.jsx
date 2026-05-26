@@ -177,24 +177,34 @@ const scanFnRef = useRef(null);
       setCamOn(true);
 
       const loop = async () => {
-        if (videoRef.current?.readyState >= 2 && detectorRef.current) {
-          try {
-            const res = await detectorRef.current.detect(videoRef.current);
-            if (res.length) {
-              const bc = res[0].rawValue;
-              const now = Date.now();
+  if (videoRef.current?.readyState >= 2 && detectorRef.current) {
+    try {
+      const res = await detectorRef.current.detect(videoRef.current);
 
-              if (bc !== lastBcRef.current.code || now - lastBcRef.current.ts > 2000) {
-                lastBcRef.current = { code:bc, ts:now };
-                scanFnRef.current?.(bc);
-              }
-            }
-          } catch {}
+      if (!res.length) {
+        noBarcodeFrameRef.current += 1;
+
+        // Barkod kadrajdan çıkarsa aynı barkodu tekrar okutmaya izin ver
+        if (noBarcodeFrameRef.current >= 8) {
+          lockedBarcodeRef.current = '';
         }
+      } else {
+        noBarcodeFrameRef.current = 0;
 
-        rafRef.current = requestAnimationFrame(loop);
-      };
+        const bc = String(res[0].rawValue || '').trim();
 
+        // Aynı barkod kameranın önünde duruyorsa tekrar sayma
+        if (bc && bc !== lockedBarcodeRef.current) {
+          lockedBarcodeRef.current = bc;
+          lastBcRef.current = { code: bc, ts: Date.now() };
+          scanFnRef.current?.(bc);
+        }
+      }
+    } catch {}
+  }
+
+  rafRef.current = requestAnimationFrame(loop);
+};
       rafRef.current = requestAnimationFrame(loop);
     } catch(e) {
       toast$('Kamera açılamadı: '+e.message, 'error');
