@@ -25,24 +25,28 @@ export default async function handler(req, res) {
     const sayinMatch = text.match(/SAYIN\s*\n([^\n]+)/);
     if (sayinMatch) cariIsim = sayinMatch[1].trim();
 
+    const eanMatches = [...text.matchAll(/\b(\d{13}|WLA\w+)\b/g)];
+    const qtyMatches = [...text.matchAll(/\b(\d+)\s+Adet\b/g)];
+    const kodoMatches = [...text.matchAll(/\b(\d{7}-\d{5})\b/g)];
+
     const products = [];
-    const pattern = /(\d{10,14}|WLA\w+)\s+(\d+)\s+Adet/g;
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      const ean = match[1];
-      const qty = parseInt(match[2]);
+    const count = Math.min(eanMatches.length, qtyMatches.length);
+
+    for (let i = 0; i < count; i++) {
+      const ean = eanMatches[i][1];
+      const qty = parseInt(qtyMatches[i][1]);
       if (!ean || !qty) continue;
 
-      const before = text.substring(Math.max(0, match.index - 300), match.index);
-      const kodoMatches = before.match(/\d{7}-\d{5}/g);
-      const malzemeKodu = kodoMatches ? kodoMatches[kodoMatches.length - 1] : '';
+      const malzemeKodu = kodoMatches[i] ? kodoMatches[i][1] : '';
 
       let urunAdi = '';
       if (malzemeKodu) {
-        const kIdx = before.lastIndexOf(malzemeKodu);
-        if (kIdx >= 0) {
-          urunAdi = before.substring(kIdx + malzemeKodu.length)
-            .replace(/\s+/g, ' ').trim().substring(0, 60);
+        const idx = text.indexOf(malzemeKodu, (kodoMatches[i-1]?.index || 0) + (i > 0 ? 1 : 0));
+        if (idx >= 0) {
+          const snippet = text.substring(idx + malzemeKodu.length, idx + malzemeKodu.length + 80);
+          urunAdi = snippet.replace(/\s+/g, ' ').trim()
+            .replace(/\d{13}.*/, '').replace(/WLA\w+.*/, '')
+            .replace(/\d{7}-\d{5}.*/, '').trim().substring(0, 50);
         }
       }
 
@@ -55,6 +59,6 @@ export default async function handler(req, res) {
     });
 
   } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack?.substring(0, 200) });
+    res.status(500).json({ error: e.message });
   }
 }
