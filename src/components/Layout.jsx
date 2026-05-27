@@ -34,7 +34,7 @@ const C = {
 export default function Layout({ page, navigate, profile, children }) {
   const { logout } = useAuth();
   const isAdmin = profile?.role === 'admin';
-  const navItems = isAdmin ? [...NAV, { id:'yonetici', label:'Yönetici', icon:'⚙️' }] : NAV;
+  const navItems = isAdmin ? [...NAV, { id:'stok', label:'Stok', icon:'📦' }, { id:'yonetici', label:'Yönetici', icon:'⚙️' }] : NAV;
 
   return (
     <div>
