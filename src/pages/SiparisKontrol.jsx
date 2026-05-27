@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { collection, addDoc, getDocs, Timestamp, doc, updateDoc, deleteDoc, query, where, orderBy } from 'firebase/firestore';
+import { collection, addDoc, getDocs, Timestamp, doc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import * as XLSX from 'xlsx';
@@ -1204,15 +1204,17 @@ export default function SiparisKontrol({ navigate }) {
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - 20);
         const cutoffTs = Timestamp.fromDate(cutoff);
-        const q = query(collection(db, 'orders'), where('durum','==','devam'), orderBy('sonGuncelleme','desc'));
+        // orderBy kaldırıldı (composite index gerektiriyor), client-side sıralama yapılıyor
+        const q = query(collection(db, 'orders'), where('durum','==','devam'));
         const snap = await getDocs(q);
         const toDelete = snap.docs.filter(d => (d.data().sonGuncelleme?.toDate?.() || new Date(0)) < cutoff);
         await Promise.all(toDelete.map(d => deleteDoc(doc(db,'orders',d.id))));
         const active = snap.docs
           .filter(d => (d.data().sonGuncelleme?.toDate?.() || new Date(0)) >= cutoff)
-          .map(d => ({ id:d.id, ...d.data() }));
+          .map(d => ({ id:d.id, ...d.data() }))
+          .sort((a,b) => (b.sonGuncelleme?.toDate?.() || 0) - (a.sonGuncelleme?.toDate?.() || 0));
         setDraftOrders(active);
-      } catch {}
+      } catch(e) { console.error('Taslak yükleme hatası:', e); }
       setDraftsLoading(false);
     };
     loadDrafts();
