@@ -1537,28 +1537,52 @@ export default function SiparisKontrol({ navigate }) {
                             <div style={{ height:'100%', width:`${pct}%`, background:'#3b82f6', borderRadius:2, transition:'width .3s' }} />
                           </div>
                         </div>
-                        <button
-                          onClick={async () => {
-                            setOrderId(order.id);
-                            setInitialCounts(order.counts || {});
-                            setItems(order.items || []);
-                            setIrsal({ irsaliyeNo:order.irsaliyeNo||'', cariIsim:order.cariIsim||'' });
-                            setView('scan');
-                          }}
-                          style={{
-                            background:'#3b82f6',
-                            color:'#fff',
-                            border:'none',
-                            borderRadius:10,
-                            padding:'8px 14px',
-                            fontSize:13,
-                            fontWeight:600,
-                            cursor:'pointer',
-                            whiteSpace:'nowrap',
-                          }}
-                        >
-                          Devam Et →
-                        </button>
+                        <div style={{ display:'flex', gap:8, flexShrink:0 }}>
+                          <button
+                            onClick={async () => {
+                              setOrderId(order.id);
+                              setInitialCounts(order.counts || {});
+                              setItems(order.items || []);
+                              setIrsal({ irsaliyeNo:order.irsaliyeNo||'', cariIsim:order.cariIsim||'' });
+                              setView('scan');
+                            }}
+                            style={{
+                              background:'#3b82f6',
+                              color:'#fff',
+                              border:'none',
+                              borderRadius:10,
+                              padding:'8px 14px',
+                              fontSize:13,
+                              fontWeight:600,
+                              cursor:'pointer',
+                              whiteSpace:'nowrap',
+                            }}
+                          >
+                            Devam Et →
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (!window.confirm(`"${order.cariIsim || order.irsaliyeNo || 'Bu sipariş'}" kontrolü silinecek. Emin misiniz?`)) return;
+                              try {
+                                await deleteDoc(doc(db, 'orders', order.id));
+                                setDraftOrders(prev => prev.filter(o => o.id !== order.id));
+                              } catch(e) { alert('Silinemedi: ' + e.message); }
+                            }}
+                            style={{
+                              background:'#fff',
+                              color:'#ef4444',
+                              border:'1px solid #fecaca',
+                              borderRadius:10,
+                              padding:'8px 10px',
+                              fontSize:16,
+                              cursor:'pointer',
+                              lineHeight:1,
+                            }}
+                            title="Kontrolü sil"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       </div>
                     );
                   })
