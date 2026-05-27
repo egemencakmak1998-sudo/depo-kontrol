@@ -392,7 +392,13 @@ export default function Stok() {
   const [manualProd, setManualProd] = useState(null);
   const [manualMiktar, setManualMiktar] = useState('');
   const [manualLok, setManualLok] = useState('');
+  const [manualTip, setManualTip] = useState('giris'); // 'giris' | 'cikis'
   const [manualLoading, setManualLoading] = useState(false);
+  // Lokasyon picker
+  const [lokKoridor, setLokKoridor] = useState('109');
+  const [lokRaf, setLokRaf] = useState(null);
+  const [lokKat, setLokKat] = useState(null);
+  const [showLokPicker, setShowLokPicker] = useState(false);
 
   const lookupManual = async (q) => {
     if (q.length < 3) { setManualProd(null); return; }
@@ -415,15 +421,19 @@ export default function Stok() {
     if (!manualProd || !manualMiktar) return;
     const miktar = parseInt(manualMiktar)||0;
     if (miktar===0) { toast$('Geçerli bir miktar girin','error'); return; }
-    if (!manualLok.trim()) { toast$('Lokasyon giriniz','error'); return; }
+    if (!manualLok.trim()) { toast$('Lokasyon seçiniz','error'); return; }
     setManualLoading(true);
     try {
       const now = Timestamp.now();
       const prev = manualProd.currentMiktar||0;
-      const next = prev + miktar;
       const lok = manualLok.trim().toUpperCase();
       const prevByLok = manualProd.byLocation || {};
-      const newByLok = { ...prevByLok, [lok]: (prevByLok[lok]||0) + miktar };
+      const prevLokMiktar = prevByLok[lok] || 0;
+      const isGiris = manualTip === 'giris';
+      const delta = isGiris ? miktar : -miktar;
+      const next = prev + delta;
+      const newLokMiktar = prevLokMiktar + delta;
+      const newByLok = { ...prevByLok, [lok]: newLokMiktar };
 
       await setDoc(doc(db,'stock',manualProd.ean), {
         ean:manualProd.ean, miktar:next,
@@ -431,16 +441,17 @@ export default function Stok() {
         byLocation:newByLok, sonGuncelleme:now
       }, {merge:true});
       await addDoc(collection(db,'stockMovements'), {
-        tarih:now, tip:'sevkiyat_manuel', ean:manualProd.ean,
+        tarih:now, tip: isGiris ? 'sevkiyat_manuel' : 'cikis_manuel',
+        ean:manualProd.ean,
         malzemeKodu:manualProd.malzemeKodu||'', urunAdi:manualProd.urunAdi||'',
-        miktar, oncekiMiktar:prev, sonrakiMiktar:next,
+        miktar:delta, oncekiMiktar:prev, sonrakiMiktar:next,
         lokasyon:lok, kaynak:'manuel',
         yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
       });
-      toast$(`${manualProd.urunAdi||manualProd.ean}: ${prev} → ${next} (${lok}) ✓`,'success');
+      const arrow = isGiris ? '→' : '→';
+      toast$(`${isGiris?'Giriş':'Çıkış'}: ${manualProd.urunAdi||manualProd.ean} ${prev} ${arrow} ${next} ✓`,'success');
       setManualProd({...manualProd, currentMiktar:next, byLocation:newByLok});
       setManualMiktar('');
-      setManualLok('');
       loadStats();
     } catch(e) { toast$('Hata: '+e.message,'error'); }
     setManualLoading(false);
@@ -742,43 +753,150 @@ export default function Stok() {
             {/* Manuel */}
             <div style={S.card}>
               <p style={{ fontSize:13, fontWeight:700, color:'#1e293b', marginBottom:10 }}>
-                ✍️ Manuel Stok Girişi
+                ✍️ Manuel Stok Hareketi
               </p>
+
+              {/* Giriş / Çıkış toggle */}
+              <div style={{ display:'flex', gap:6, marginBottom:12, background:'#f1f5f9',
+                borderRadius:10, padding:4 }}>
+                {[['giris','📥 Giriş','#10b981'],['cikis','📤 Çıkış','#ef4444']].map(([tip,lbl,clr])=>(
+                  <button key={tip} onClick={()=>setManualTip(tip)}
+                    style={{ flex:1, border:'none', borderRadius:8, padding:'8px 0',
+                      fontSize:13, fontWeight:700, cursor:'pointer',
+                      background: manualTip===tip ? clr : 'transparent',
+                      color: manualTip===tip ? '#fff' : '#64748b' }}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+
               <input style={{ ...S.input, marginBottom:10 }}
                 placeholder="EAN veya malzeme kodu (tam girin)"
                 value={manualQuery}
                 onChange={e => { setManualQuery(e.target.value); lookupManual(e.target.value); }} />
+
               {manualProd && (
-                <div style={{ background:'#f8fafc', borderRadius:10, padding:'10px 12px', marginBottom:10 }}>
+                <div style={{ background:'#f8fafc', borderRadius:10, padding:'10px 12px' }}>
                   <p style={{ fontSize:13, fontWeight:600, color:'#1e293b' }}>{manualProd.urunAdi}</p>
-                  <p style={{ fontSize:11, color:'#94a3b8', fontFamily:'monospace' }}>
+                  <p style={{ fontSize:11, color:'#94a3b8', fontFamily:'monospace', marginBottom:4 }}>
                     {manualProd.malzemeKodu} · {manualProd.ean}
                   </p>
-                  <p style={{ fontSize:12, color:'#64748b', marginTop:4 }}>
-                    Mevcut stok: <strong>{manualProd.currentMiktar}</strong> adet
+                  <p style={{ fontSize:12, color:'#64748b', marginBottom:10 }}>
+                    Toplam stok: <strong>{manualProd.currentMiktar}</strong> adet
                   </p>
-                  <div style={{ marginTop:8 }}>
-                    <input style={{ ...S.input, marginBottom:8 }}
-                      placeholder="Lokasyon (örn: A109S013B)"
-                      value={manualLok}
-                      onChange={e => setManualLok(e.target.value.toUpperCase())} />
-                    {manualProd.byLocation && Object.keys(manualProd.byLocation).length>0 && (
-                      <div style={{ marginBottom:8, fontSize:11, color:'#64748b' }}>
-                        Mevcut lokasyonlar: {Object.entries(manualProd.byLocation)
-                          .map(([l,m])=>`${l}: ${m}`).join(' · ')}
-                      </div>
-                    )}
-                    <div style={{ display:'flex', gap:8 }}>
-                      <input type="number" style={{ ...S.input, flex:1 }}
-                        placeholder="Eklenecek miktar"
-                        value={manualMiktar}
-                        onChange={e => setManualMiktar(e.target.value)} />
-                      <button onClick={addManualStock} disabled={manualLoading}
-                        style={{ ...S.btn, background:'#10b981', color:'#fff',
-                          opacity:manualLoading?0.6:1, flexShrink:0 }}>
-                        {manualLoading ? '...' : 'Ekle'}
-                      </button>
+
+                  {/* Lokasyon seçici */}
+                  <p style={{ fontSize:11, fontWeight:700, color:'#64748b', marginBottom:6,
+                    textTransform:'uppercase', letterSpacing:1 }}>Lokasyon</p>
+
+                  {/* Seçili lokasyon göster */}
+                  <div style={{ display:'flex', gap:8, marginBottom:8, alignItems:'center' }}>
+                    <div style={{ flex:1, background:'#fff', border:'1px solid #e2e8f0',
+                      borderRadius:8, padding:'8px 12px', fontSize:13, fontFamily:'monospace',
+                      color: manualLok ? '#1e293b' : '#94a3b8', fontWeight:600 }}>
+                      {manualLok || 'Lokasyon seçilmedi'}
                     </div>
+                    <button onClick={()=>setShowLokPicker(p=>!p)}
+                      style={{ ...S.btn, padding:'8px 12px', fontSize:12,
+                        background:'#e2e8f0', color:'#475569' }}>
+                      {showLokPicker ? '▲ Kapat' : '▼ Seç'}
+                    </button>
+                    {manualLok && (
+                      <button onClick={()=>setManualLok('')}
+                        style={{ ...S.btn, padding:'8px 10px', fontSize:12,
+                          background:'#fee2e2', color:'#ef4444' }}>✕</button>
+                    )}
+                  </div>
+
+                  {/* Lokasyon picker */}
+                  {showLokPicker && (
+                    <div style={{ background:'#fff', border:'1px solid #e2e8f0',
+                      borderRadius:10, padding:12, marginBottom:10 }}>
+                      {/* Koridor */}
+                      <p style={{ fontSize:11, fontWeight:700, color:'#64748b', marginBottom:6 }}>KORİDOR</p>
+                      <div style={{ display:'flex', gap:8, marginBottom:10 }}>
+                        {['109','110'].map(k=>(
+                          <button key={k} onClick={()=>{ setLokKoridor(k); setLokRaf(null); setLokKat(null); setManualLok(''); }}
+                            style={{ flex:1, border:'none', borderRadius:8, padding:'7px 0',
+                              fontSize:13, fontWeight:700, cursor:'pointer',
+                              background: lokKoridor===k?'#1e40af':'#f1f5f9',
+                              color: lokKoridor===k?'#fff':'#475569' }}>
+                            {k}
+                          </button>
+                        ))}
+                      </div>
+                      {/* Raf */}
+                      <p style={{ fontSize:11, fontWeight:700, color:'#64748b', marginBottom:6 }}>
+                        RAF {lokRaf?`— ${lokRaf}`:''}
+                      </p>
+                      <div style={{ display:'grid', gridTemplateColumns:'repeat(8,1fr)',
+                        gap:4, maxHeight:160, overflowY:'auto', marginBottom:10 }}>
+                        {Array.from({length:114},(_,i)=>i+1).map(n=>(
+                          <button key={n} onClick={()=>{ setLokRaf(n); setLokKat(null);
+                            setManualLok(''); }}
+                            style={{ padding:'5px 0', border:'none', borderRadius:5,
+                              fontSize:11, fontWeight:600, cursor:'pointer',
+                              background: lokRaf===n?'#1e40af':'#f1f5f9',
+                              color: lokRaf===n?'#fff':'#475569' }}>
+                            {n}
+                          </button>
+                        ))}
+                      </div>
+                      {/* Kat */}
+                      {lokRaf && (
+                        <>
+                          <p style={{ fontSize:11, fontWeight:700, color:'#64748b', marginBottom:6 }}>KAT</p>
+                          <div style={{ display:'flex', gap:6 }}>
+                            {['A','B','C','D','E','F'].map(k=>(
+                              <button key={k} onClick={()=>{
+                                setLokKat(k);
+                                const kod = `A${lokKoridor}S${String(lokRaf).padStart(3,'0')}${k}`;
+                                setManualLok(kod);
+                                setShowLokPicker(false);
+                              }}
+                                style={{ flex:1, border:'none', borderRadius:8, padding:'7px 0',
+                                  fontSize:13, fontWeight:700, cursor:'pointer',
+                                  background: lokKat===k?'#1e40af':'#f1f5f9',
+                                  color: lokKat===k?'#fff':'#475569' }}>
+                                {k}
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Mevcut lokasyon adetleri */}
+                  {manualProd.byLocation && Object.keys(manualProd.byLocation).length>0 && (
+                    <div style={{ marginBottom:10, fontSize:11, color:'#64748b',
+                      background:'#fff', borderRadius:8, padding:'6px 10px',
+                      border:'1px solid #e2e8f0' }}>
+                      {Object.entries(manualProd.byLocation)
+                        .filter(([,m])=>m>0)
+                        .map(([l,m])=>(
+                          <span key={l} style={{ marginRight:10, cursor:'pointer',
+                            color: manualLok===l?'#1e40af':'#64748b',
+                            fontWeight: manualLok===l?700:400 }}
+                            onClick={()=>{ setManualLok(l); setShowLokPicker(false); }}>
+                            📍{l}: {m}
+                          </span>
+                        ))}
+                    </div>
+                  )}
+
+                  {/* Miktar */}
+                  <div style={{ display:'flex', gap:8 }}>
+                    <input type="number" style={{ ...S.input, flex:1 }}
+                      placeholder={manualTip==='giris'?'Eklenecek miktar':'Çıkarılacak miktar'}
+                      value={manualMiktar}
+                      onChange={e => setManualMiktar(e.target.value)} />
+                    <button onClick={addManualStock} disabled={manualLoading}
+                      style={{ ...S.btn, flexShrink:0,
+                        background: manualTip==='giris'?'#10b981':'#ef4444',
+                        color:'#fff', opacity:manualLoading?0.6:1 }}>
+                      {manualLoading ? '...' : manualTip==='giris' ? 'Ekle' : 'Çıkar'}
+                    </button>
                   </div>
                 </div>
               )}
