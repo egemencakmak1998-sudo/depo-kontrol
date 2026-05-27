@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { collection, addDoc, getDocs, Timestamp, doc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
+import { collection, addDoc, getDocs, Timestamp, doc, updateDoc, deleteDoc, query, where, writeBatch, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import * as XLSX from 'xlsx';
@@ -649,6 +649,35 @@ function ScanSession({ items, irsaliyeInfo, orderId, initialCounts, onDone, onBa
         const ref = await addDoc(collection(db, 'orders'), { ...orderData, tarih:Timestamp.now() });
         finalId = ref.id;
       }
+
+      // Stoktan düş (beklenen adet)
+      try {
+        const now = Timestamp.now();
+        const stockBatch = writeBatch(db);
+        const movBatch = writeBatch(db);
+        for (const item of itemsData) {
+          if (!item.ean) continue;
+          const stockRef = doc(db, 'stock', item.ean);
+          const stockSnap = await getDocs(query(collection(db,'stock'), where('ean','==',item.ean)));
+          const prev = stockSnap.empty ? 0 : (stockSnap.docs[0].data().miktar || 0);
+          const next = prev - item.beklenen;
+          stockBatch.set(stockRef, {
+            ean: item.ean, miktar: next,
+            urunAdi: item.urunAdi || '', malzemeKodu: item.malzemeKodu || '',
+            sonGuncelleme: now,
+          }, { merge: true });
+          movBatch.set(doc(collection(db,'stockMovements')), {
+            tarih: now, tip: 'irsaliye_cikis',
+            ean: item.ean, malzemeKodu: item.malzemeKodu || '',
+            urunAdi: item.urunAdi || '',
+            miktar: -item.beklenen, oncekiMiktar: prev, sonrakiMiktar: next,
+            kaynak: 'irsaliye:' + (irsaliyeInfo.irsaliyeNo || finalId),
+            yapan: profile?.name || user?.email || '', yapanId: user?.uid || '',
+          });
+        }
+        await stockBatch.commit();
+        await movBatch.commit();
+      } catch {}
 
       toast$('Kontrol kaydedildi ✓', 'success');
       setTimeout(() => onDone(finalId), 1000);
