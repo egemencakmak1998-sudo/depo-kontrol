@@ -391,6 +391,7 @@ export default function Stok() {
   const [manualQuery, setManualQuery] = useState('');
   const [manualProd, setManualProd] = useState(null);
   const [manualMiktar, setManualMiktar] = useState('');
+  const [manualLok, setManualLok] = useState('');
   const [manualLoading, setManualLoading] = useState(false);
 
   const lookupManual = async (q) => {
@@ -402,7 +403,8 @@ export default function Stok() {
         .find(p => (p.ean&&p.ean===q) || (p.malzemeKodu&&p.malzemeKodu.toLowerCase()===ql));
       if (found) {
         const s = await getDoc(doc(db,'stock',found.ean||''));
-        setManualProd({...found, currentMiktar: s.exists()?(s.data().miktar||0):0});
+        const stockData = s.exists() ? s.data() : {};
+        setManualProd({...found, currentMiktar: stockData.miktar||0, byLocation: stockData.byLocation||{}});
       } else {
         setManualProd(null);
       }
@@ -413,25 +415,32 @@ export default function Stok() {
     if (!manualProd || !manualMiktar) return;
     const miktar = parseInt(manualMiktar)||0;
     if (miktar===0) { toast$('Geçerli bir miktar girin','error'); return; }
+    if (!manualLok.trim()) { toast$('Lokasyon giriniz','error'); return; }
     setManualLoading(true);
     try {
       const now = Timestamp.now();
       const prev = manualProd.currentMiktar||0;
       const next = prev + miktar;
+      const lok = manualLok.trim().toUpperCase();
+      const prevByLok = manualProd.byLocation || {};
+      const newByLok = { ...prevByLok, [lok]: (prevByLok[lok]||0) + miktar };
+
       await setDoc(doc(db,'stock',manualProd.ean), {
         ean:manualProd.ean, miktar:next,
         urunAdi:manualProd.urunAdi||'', malzemeKodu:manualProd.malzemeKodu||'',
-        sonGuncelleme:now
+        byLocation:newByLok, sonGuncelleme:now
       }, {merge:true});
       await addDoc(collection(db,'stockMovements'), {
         tarih:now, tip:'sevkiyat_manuel', ean:manualProd.ean,
         malzemeKodu:manualProd.malzemeKodu||'', urunAdi:manualProd.urunAdi||'',
         miktar, oncekiMiktar:prev, sonrakiMiktar:next,
-        kaynak:'manuel', yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
+        lokasyon:lok, kaynak:'manuel',
+        yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
       });
-      toast$(`${manualProd.urunAdi||manualProd.ean}: ${prev} → ${next} ✓`,'success');
-      setManualProd({...manualProd, currentMiktar:next});
+      toast$(`${manualProd.urunAdi||manualProd.ean}: ${prev} → ${next} (${lok}) ✓`,'success');
+      setManualProd({...manualProd, currentMiktar:next, byLocation:newByLok});
       setManualMiktar('');
+      setManualLok('');
       loadStats();
     } catch(e) { toast$('Hata: '+e.message,'error'); }
     setManualLoading(false);
@@ -748,16 +757,28 @@ export default function Stok() {
                   <p style={{ fontSize:12, color:'#64748b', marginTop:4 }}>
                     Mevcut stok: <strong>{manualProd.currentMiktar}</strong> adet
                   </p>
-                  <div style={{ display:'flex', gap:8, marginTop:8 }}>
-                    <input type="number" style={{ ...S.input, flex:1 }}
-                      placeholder="Eklenecek miktar"
-                      value={manualMiktar}
-                      onChange={e => setManualMiktar(e.target.value)} />
-                    <button onClick={addManualStock} disabled={manualLoading}
-                      style={{ ...S.btn, background:'#10b981', color:'#fff',
-                        opacity:manualLoading?0.6:1, flexShrink:0 }}>
-                      {manualLoading ? '...' : 'Ekle'}
-                    </button>
+                  <div style={{ marginTop:8 }}>
+                    <input style={{ ...S.input, marginBottom:8 }}
+                      placeholder="Lokasyon (örn: A109S013B)"
+                      value={manualLok}
+                      onChange={e => setManualLok(e.target.value.toUpperCase())} />
+                    {manualProd.byLocation && Object.keys(manualProd.byLocation).length>0 && (
+                      <div style={{ marginBottom:8, fontSize:11, color:'#64748b' }}>
+                        Mevcut lokasyonlar: {Object.entries(manualProd.byLocation)
+                          .map(([l,m])=>`${l}: ${m}`).join(' · ')}
+                      </div>
+                    )}
+                    <div style={{ display:'flex', gap:8 }}>
+                      <input type="number" style={{ ...S.input, flex:1 }}
+                        placeholder="Eklenecek miktar"
+                        value={manualMiktar}
+                        onChange={e => setManualMiktar(e.target.value)} />
+                      <button onClick={addManualStock} disabled={manualLoading}
+                        style={{ ...S.btn, background:'#10b981', color:'#fff',
+                          opacity:manualLoading?0.6:1, flexShrink:0 }}>
+                        {manualLoading ? '...' : 'Ekle'}
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
