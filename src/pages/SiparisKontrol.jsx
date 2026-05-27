@@ -575,7 +575,7 @@ function ScanSession({ items, irsaliyeInfo, orderId, initialCounts, onDone, onBa
   }, 0);
 
   const totalExpected = items.reduce((a, i) => a + i.beklenen, 0);
-  const progress = totalExpected ? Math.min(100, Math.round((totalScanned / totalExpected) * 100)) : 0;
+  const progress = totalExpected ? (totalScanned >= totalExpected ? 100 : Math.floor((totalScanned / totalExpected) * 100)) : 0;
   const visible = filter === 'all' ? items : items.filter(i => getStatus(i) === filter);
 
   const handleDone = () => setShowKoli(true);
@@ -1202,6 +1202,57 @@ function ScanSession({ items, irsaliyeInfo, orderId, initialCounts, onDone, onBa
   );
 }
 
+/* ── MISSING PANEL ──────────────────────────────────── */
+function MissingPanel({ order, productLocMap }) {
+  const counts = order.counts || {};
+  const missing = (order.items || [])
+    .map(item => {
+      const key = item.ean || item.malzemeKodu;
+      const counted = counts[key] || 0;
+      const eksik = item.beklenen - counted;
+      const locs = productLocMap
+        ? (productLocMap[item.ean] || productLocMap[item.malzemeKodu] || [])
+        : [];
+      return { ...item, counted, eksik, locs };
+    })
+    .filter(i => i.eksik > 0)
+    .sort((a,b) => b.eksik - a.eksik);
+
+  return (
+    <div style={{ marginTop:10, borderTop:'1px solid #e2e8f0', paddingTop:10 }}>
+      <p style={{ fontSize:12, fontWeight:700, color:'#64748b', marginBottom:8 }}>
+        {missing.length === 0 ? '✅ Eksik ürün yok' : `⚠️ ${missing.length} kalem eksik`}
+      </p>
+      {missing.map((item, idx) => (
+        <div key={idx} style={{
+          display:'flex', alignItems:'center', gap:10,
+          padding:'7px 0',
+          borderBottom: idx < missing.length-1 ? '1px solid #f1f5f9' : 'none',
+        }}>
+          <div style={{ flex:1, minWidth:0 }}>
+            <p style={{ fontSize:13, fontWeight:600, color:'#1e293b', marginBottom:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+              {item.urunAdi || item.ean}
+            </p>
+            <p style={{ fontSize:11, color:'#94a3b8', fontFamily:'monospace' }}>
+              {item.malzemeKodu && <span style={{ marginRight:8 }}>{item.malzemeKodu}</span>}
+              {item.ean}
+            </p>
+            {item.locs.length > 0 ? (
+              <p style={{ fontSize:11, color:'#3b82f6', marginTop:2 }}>📍 {item.locs.join(' · ')}</p>
+            ) : (
+              <p style={{ fontSize:11, color:'#cbd5e1', marginTop:2 }}>📍 Lokasyon girilmemiş</p>
+            )}
+          </div>
+          <div style={{ textAlign:'right', flexShrink:0 }}>
+            <p style={{ fontSize:13, fontWeight:700, color:'#ef4444' }}>-{item.eksik}</p>
+            <p style={{ fontSize:11, color:'#94a3b8' }}>{item.counted}/{item.beklenen}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ── MAIN PAGE ───────────────────────────────────────── */
 export default function SiparisKontrol({ navigate }) {
   const [view, setView] = useState('list');
@@ -1215,6 +1266,8 @@ export default function SiparisKontrol({ navigate }) {
   const [initialCounts, setInitialCounts] = useState({});
   const [draftOrders, setDraftOrders] = useState([]);
   const [draftsLoading, setDraftsLoading] = useState(false);
+  const [expandedMissingId, setExpandedMissingId] = useState(null);
+  const [productLocMap, setProductLocMap] = useState(null); // ean -> locations[]
   const { user } = useAuth();
 
   const toast$ = (msg, type='info') => setToast({ msg, type, id:Date.now() });
@@ -1532,7 +1585,7 @@ export default function SiparisKontrol({ navigate }) {
                   draftOrders.map(order => {
                     const scanned = Object.values(order.counts || {}).reduce((a,b) => a+b, 0);
                     const total = (order.items || []).reduce((a,i) => a+i.beklenen, 0);
-                    const pct = total ? Math.round(scanned/total*100) : 0;
+                    const pct = total ? (scanned >= total ? 100 : Math.floor(scanned/total*100)) : 0;
                     const tarih = order.sonGuncelleme?.toDate?.()?.toLocaleDateString('tr-TR') || '';
 
                     return (
@@ -1544,11 +1597,9 @@ export default function SiparisKontrol({ navigate }) {
                           borderRadius:14,
                           padding:'12px 16px',
                           marginBottom:10,
-                          display:'flex',
-                          alignItems:'center',
-                          gap:12,
                         }}
                       >
+                        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
                         <div style={{ flex:1, minWidth:0 }}>
                           <p style={{ fontWeight:600, fontSize:14, color:'#1e293b', marginBottom:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                             {order.cariIsim || order.irsaliyeNo || 'İsimsiz'}
@@ -1562,6 +1613,40 @@ export default function SiparisKontrol({ navigate }) {
                           </div>
                         </div>
                         <div style={{ display:'flex', gap:8, flexShrink:0 }}>
+                          <button
+                            onClick={async () => {
+                              // Eksikler panelini aç/kapat
+                              if (expandedMissingId === order.id) {
+                                setExpandedMissingId(null);
+                              } else {
+                                setExpandedMissingId(order.id);
+                                // Lokasyon haritası henüz yüklenmemişse yükle
+                                if (!productLocMap) {
+                                  const pSnap = await getDocs(collection(db, 'products'));
+                                  const lMap = {};
+                                  pSnap.docs.forEach(d => {
+                                    const p = d.data();
+                                    if (p.ean) lMap[String(p.ean).trim()] = p.locations || [];
+                                    if (p.malzemeKodu) lMap[String(p.malzemeKodu).trim()] = p.locations || [];
+                                  });
+                                  setProductLocMap(lMap);
+                                }
+                              }
+                            }}
+                            style={{
+                              background: expandedMissingId === order.id ? '#fef3c7' : '#fff',
+                              color: expandedMissingId === order.id ? '#d97706' : '#64748b',
+                              border: `1px solid ${expandedMissingId === order.id ? '#fde68a' : '#e2e8f0'}`,
+                              borderRadius:10,
+                              padding:'8px 10px',
+                              fontSize:12,
+                              fontWeight:600,
+                              cursor:'pointer',
+                              whiteSpace:'nowrap',
+                            }}
+                          >
+                            {expandedMissingId === order.id ? '▲ Eksikler' : '▼ Eksikler'}
+                          </button>
                           <button
                             onClick={async () => {
                               setOrderId(order.id);
@@ -1607,6 +1692,12 @@ export default function SiparisKontrol({ navigate }) {
                             ✕
                           </button>
                         </div>
+                        </div>
+
+                        {/* Eksik ürünler paneli */}
+                        {expandedMissingId === order.id && (
+                          <MissingPanel order={order} productLocMap={productLocMap} />
+                        )}
                       </div>
                     );
                   })
