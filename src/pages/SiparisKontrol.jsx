@@ -53,7 +53,11 @@ function PageHeader({ title, onBack, right }) {
     >
       {onBack && (
         <button
-          onClick={onBack}
+          onClick={async () => {
+            clearTimeout(autoSaveTimer.current);
+            await saveNow(countsRef.current);
+            onBack();
+          }}
           style={{
             background:'rgba(255,255,255,.08)',
             border:'none',
@@ -306,18 +310,38 @@ function ScanSession({ items, irsaliyeInfo, orderId, initialCounts, onDone, onBa
   const [showKoli, setShowKoli] = useState(false);
   const [startTime] = useState(Date.now());
 
+  // Counts'u her zaman ref'te tut (unmount'ta erişmek için)
+  const countsRef = useRef(counts);
+  useEffect(() => { countsRef.current = counts; }, [counts]);
+
+  // Firestore'a anında kaydet
+  const saveNow = useCallback(async (c) => {
+    if (!orderId) return;
+    try {
+      await updateDoc(doc(db, 'orders', orderId), { counts: c, sonGuncelleme: Timestamp.now() });
+    } catch {}
+  }, [orderId]);
+
   // 3 saniyelik debounce ile otomatik kayıt
   const autoSaveTimer = useRef(null);
   useEffect(() => {
     if (!orderId || Object.keys(counts).length === 0) return;
     clearTimeout(autoSaveTimer.current);
-    autoSaveTimer.current = setTimeout(async () => {
-      try {
-        await updateDoc(doc(db, 'orders', orderId), { counts, sonGuncelleme: Timestamp.now() });
-      } catch {}
-    }, 3000);
+    autoSaveTimer.current = setTimeout(() => saveNow(counts), 3000);
     return () => clearTimeout(autoSaveTimer.current);
-  }, [counts, orderId]);
+  }, [counts, orderId, saveNow]);
+
+  // Component kapanırken (geri/tamamla) anında kaydet
+  useEffect(() => {
+    return () => {
+      if (!orderId) return;
+      const c = countsRef.current;
+      if (Object.keys(c).length > 0) {
+        clearTimeout(autoSaveTimer.current);
+        updateDoc(doc(db, 'orders', orderId), { counts: c, sonGuncelleme: Timestamp.now() }).catch(() => {});
+      }
+    };
+  }, [orderId]);
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
