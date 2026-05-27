@@ -220,6 +220,7 @@ export default function Raporlar({ profile }) {
   const [editKoli, setEditKoli] = useState(null);
   const [showImport, setImport] = useState(false);
   const [toast, setToast]       = useState(null);
+  const [reportLimit, setReportLimit] = useState(100);
   const isAdmin = profile?.role==='admin';
   const toast$ = (msg,type='info')=>setToast({msg,type,id:Date.now()});
 
@@ -227,8 +228,8 @@ export default function Raporlar({ profile }) {
     setLoading(true);
     try {
       const [oSnap,rSnap]=await Promise.all([
-        getDocs(query(collection(db,'orders'),orderBy('tarih','desc'),limit(100))),
-        getDocs(query(collection(db,'returns'),orderBy('tarih','desc'),limit(100))),
+        getDocs(query(collection(db,'orders'),orderBy('tarih','desc'),limit(reportLimit))),
+        getDocs(query(collection(db,'returns'),orderBy('tarih','desc'),limit(reportLimit))),
       ]);
       const allOrders = oSnap.docs.map(d=>({id:d.id,...d.data()})).filter(o=>o.durum==='tamamlandi');
       const seenIrs = new Map();
@@ -242,7 +243,7 @@ export default function Raporlar({ profile }) {
       setReturns(rSnap.docs.map(d=>({id:d.id,...d.data()})));
     }catch{}
     finally{setLoading(false);}
-  },[]);
+  },[reportLimit]);
 
   useEffect(()=>{loadData();},[loadData]);
 
@@ -319,7 +320,16 @@ export default function Raporlar({ profile }) {
         {/* Export + count */}
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
           <p style={{fontSize:13,color:'#64748b'}}>{tab==='siparisler'?orders.length:returns.length} kayıt</p>
-          <button onClick={tab==='siparisler'?exportOrders:exportReturns} style={{background:'linear-gradient(135deg,#10b981,#059669)',border:'none',color:'#fff',padding:'8px 14px',borderRadius:10,fontWeight:700,fontSize:12,cursor:'pointer'}}>⬇️ Excel İndir</button>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <select value={reportLimit} onChange={e=>{setReportLimit(Number(e.target.value));}}
+              style={{border:'1px solid #e2e8f0',borderRadius:8,padding:'7px 10px',fontSize:12,
+                fontWeight:600,color:'#475569',background:'#fff',cursor:'pointer'}}>
+              {[50,100,200,500,1000].map(n=>(
+                <option key={n} value={n}>Son {n}</option>
+              ))}
+            </select>
+            <button onClick={tab==='siparisler'?exportOrders:exportReturns} style={{background:'linear-gradient(135deg,#10b981,#059669)',border:'none',color:'#fff',padding:'8px 14px',borderRadius:10,fontWeight:700,fontSize:12,cursor:'pointer'}}>⬇️ Excel İndir</button>
+          </div>
         </div>
 
         {loading?(
