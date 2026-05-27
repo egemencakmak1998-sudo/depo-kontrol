@@ -1330,6 +1330,18 @@ export default function SiparisKontrol({ navigate }) {
         };
       });
 
+      // Aynı irsaliye numarası daha önce yüklenmiş mi kontrol et
+      const irsNo = parsed.irsaliyeNo || '';
+      if (irsNo) {
+        const dupQ = query(collection(db, 'orders'), where('irsaliyeNo', '==', irsNo));
+        const dupSnap = await getDocs(dupQ);
+        if (!dupSnap.empty) {
+          const existing = dupSnap.docs[0].data();
+          const durum = existing.durum === 'tamamlandi' ? 'tamamlandı' : 'devam ediyor';
+          throw new Error(`Bu irsaliye zaten sistemde kayıtlı (${irsNo}) — durum: ${durum}`);
+        }
+      }
+
       // Firestore'a taslak olarak kaydet
       const draftRef = await addDoc(collection(db, 'orders'), {
         irsaliyeNo: parsed.irsaliyeNo || '',
