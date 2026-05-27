@@ -37,7 +37,18 @@ function KargoImportModal({ onDone, onClose }) {
 
   useEffect(()=>{
     getDocs(query(collection(db,'orders'),where('durum','==','tamamlandi'),orderBy('tarih','desc'),limit(200)))
-      .then(snap=>setOrders(snap.docs.map(d=>({id:d.id,...d.data()}))));
+      .then(snap=>{
+      const all = snap.docs.map(d=>({id:d.id,...d.data()}));
+      // Aynı irsaliye numarasından sadece en yeniyi göster
+      const seen = new Map();
+      all.forEach(o => {
+        const key = o.irsaliyeNo || o.id;
+        if (!seen.has(key) || (o.tarih?.toDate?.() > seen.get(key).tarih?.toDate?.())) {
+          seen.set(key, o);
+        }
+      });
+      setOrders([...seen.values()]);
+    });
   },[]);
 
   const parseKargoFile = (file) => {
@@ -147,7 +158,15 @@ export default function Raporlar({ profile }) {
         getDocs(query(collection(db,'orders'),where('durum','==','tamamlandi'),orderBy('tarih','desc'),limit(100))),
         getDocs(query(collection(db,'returns'),orderBy('tarih','desc'),limit(100))),
       ]);
-      setOrders(oSnap.docs.map(d=>({id:d.id,...d.data()})));
+      const allOrders = oSnap.docs.map(d=>({id:d.id,...d.data()}));
+      const seenIrs = new Map();
+      allOrders.forEach(o => {
+        const key = o.irsaliyeNo || o.id;
+        if (!seenIrs.has(key) || (o.tarih?.toDate?.() > seenIrs.get(key).tarih?.toDate?.())) {
+          seenIrs.set(key, o);
+        }
+      });
+      setOrders([...seenIrs.values()]);
       setReturns(rSnap.docs.map(d=>({id:d.id,...d.data()})));
     }catch{}
     finally{setLoading(false);}
