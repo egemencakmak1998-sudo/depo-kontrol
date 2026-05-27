@@ -100,7 +100,7 @@ function Urunler() {
           const wb=XLSX.read(new Uint8Array(result),{type:'array'});
           const ws=wb.Sheets[wb.SheetNames[0]];
           const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
-          let hIdx=-1,cEan=-1,cCode=-1,cDesc=-1,cBirim=-1;
+          let hIdx=-1,cEan=-1,cCode=-1,cDesc=-1,cBirim=-1,cLok=-1;
           for(let r=0;r<Math.min(rows.length,20);r++){
             const cells=rows[r].map(c=>String(c).toLowerCase().replace(/\s+/g,' ').trim());
             let eF=false;
@@ -109,25 +109,49 @@ function Urunler() {
               if(/(malzeme|stok|ürün|item)\s*(kodu?|code?)/.test(cell)&&cCode<0) cCode=j;
               if(/açıklama|aciklama|description|ürün ad/.test(cell)&&cDesc<0) cDesc=j;
               if(/birim|unit/.test(cell)&&cBirim<0) cBirim=j;
+              if(/lokasyon|location/.test(cell)&&cLok<0) cLok=j;
             });
             if(eF){hIdx=r;break;}
           }
           if(hIdx<0){toast$('EAN sütunu bulunamadı','error');setImp(false);return;}
+
+          // Mevcut ürünleri EAN'a göre eşleştir (güncelleme için)
+          const existingSnap=await getDocs(collection(db,'products'));
+          const eanToDocId={};
+          existingSnap.docs.forEach(d=>{ if(d.data().ean) eanToDocId[String(d.data().ean).trim()]=d.id; });
+
           const batch=writeBatch(db);
-          let count=0;
+          let created=0, updated=0;
           rows.slice(hIdx+1).forEach(row=>{
             const ean=String(row[cEan]||'').trim();
             if(!ean) return;
-            const ref=doc(collection(db,'products'));
-            batch.set(ref,{
-              ean, malzemeKodu:cCode>=0?String(row[cCode]||'').trim():'',
+
+            // Lokasyon: virgülle ayrılmış string → array
+            const lokStr=cLok>=0?String(row[cLok]||'').trim():'';
+            const locations=lokStr
+              ? lokStr.split(',').map(l=>l.trim()).filter(Boolean)
+              : [];
+
+            const data={
+              ean,
+              malzemeKodu:cCode>=0?String(row[cCode]||'').trim():'',
               urunAdi:cDesc>=0?String(row[cDesc]||'').trim():'',
               birim:cBirim>=0?String(row[cBirim]||'Adet').trim():'Adet',
-            });
-            count++;
+              locations,
+            };
+
+            if(eanToDocId[ean]){
+              // Mevcut ürünü güncelle
+              batch.update(doc(db,'products',eanToDocId[ean]), data);
+              updated++;
+            } else {
+              // Yeni ürün oluştur
+              batch.set(doc(collection(db,'products')), data);
+              created++;
+            }
           });
           await batch.commit();
-          toast$(`${count} ürün yüklendi ✓`,'success');
+          toast$(`${created} yeni, ${updated} güncellendi ✓`,'success');
           load();
         }catch(e){toast$('Hata: '+e.message,'error');}
         finally{setImp(false);}
