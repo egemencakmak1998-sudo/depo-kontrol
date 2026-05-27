@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { collection, addDoc, getDocs, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, getDocs, Timestamp, doc, updateDoc, deleteDoc, query, where, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import * as XLSX from 'xlsx';
@@ -291,10 +291,10 @@ function KoliModal({ onSave, onClose }) {
 }
 
 /* ── SCAN SESSION ────────────────────────────────────── */
-function ScanSession({ items, irsaliyeInfo, onDone, onBack }) {
+function ScanSession({ items, irsaliyeInfo, orderId, initialCounts, onDone, onBack }) {
   const { user, profile } = useAuth();
 
-  const [counts, setCounts] = useState({});
+  const [counts, setCounts] = useState(initialCounts || {});
   const [scanHistory, setScanHistory] = useState([]);
   const [lastScan, setLastScan] = useState(null);
   const [mode, setMode] = useState('text');
@@ -305,6 +305,19 @@ function ScanSession({ items, irsaliyeInfo, onDone, onBack }) {
   const [saving, setSaving] = useState(false);
   const [showKoli, setShowKoli] = useState(false);
   const [startTime] = useState(Date.now());
+
+  // 3 saniyelik debounce ile otomatik kayıt
+  const autoSaveTimer = useRef(null);
+  useEffect(() => {
+    if (!orderId || Object.keys(counts).length === 0) return;
+    clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(async () => {
+      try {
+        await updateDoc(doc(db, 'orders', orderId), { counts, sonGuncelleme: Timestamp.now() });
+      } catch {}
+    }, 3000);
+    return () => clearTimeout(autoSaveTimer.current);
+  }, [counts, orderId]);
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -585,14 +598,14 @@ function ScanSession({ items, irsaliyeInfo, onDone, onBack }) {
         };
       });
 
-      const ref = await addDoc(collection(db, 'orders'), {
+      const orderData = {
         irsaliyeNo:irsaliyeInfo.irsaliyeNo || '',
         cariIsim:irsaliyeInfo.cariIsim || '',
-        tarih:Timestamp.now(),
         operator:profile?.name || user?.email || '',
         operatorId:user?.uid || '',
         items:itemsData,
         durum:'tamamlandi',
+        counts:{},
         koliInfo,
         kargoTakipNo:'',
         kargoFirmasi:'Yurtiçi Kargo',
@@ -602,10 +615,19 @@ function ScanSession({ items, irsaliyeInfo, onDone, onBack }) {
         fazla:stats.excess,
         taranmadi:stats.pending,
         toplamKalem:items.length,
-      });
+        sonGuncelleme:Timestamp.now(),
+      };
+
+      let finalId = orderId;
+      if (orderId) {
+        await updateDoc(doc(db, 'orders', orderId), orderData);
+      } else {
+        const ref = await addDoc(collection(db, 'orders'), { ...orderData, tarih:Timestamp.now() });
+        finalId = ref.id;
+      }
 
       toast$('Kontrol kaydedildi ✓', 'success');
-      setTimeout(() => onDone(ref.id), 1000);
+      setTimeout(() => onDone(finalId), 1000);
     } catch (e) {
       toast$('Kayıt hatası: ' + e.message, 'error');
     } finally {
@@ -1165,8 +1187,36 @@ export default function SiparisKontrol({ navigate }) {
   const [irsaliyeInfo, setIrsal] = useState({});
   const [toast, setToast] = useState(null);
   const [dragging, setDragging] = useState(false);
+  const [orderId, setOrderId] = useState(null);
+  const [initialCounts, setInitialCounts] = useState({});
+  const [draftOrders, setDraftOrders] = useState([]);
+  const [draftsLoading, setDraftsLoading] = useState(false);
+  const { user } = useAuth();
 
   const toast$ = (msg, type='info') => setToast({ msg, type, id:Date.now() });
+
+  // Taslak siparişleri yükle + 20 günden eskilerini sil
+  useEffect(() => {
+    if (view !== 'list') return;
+    const loadDrafts = async () => {
+      setDraftsLoading(true);
+      try {
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - 20);
+        const cutoffTs = Timestamp.fromDate(cutoff);
+        const q = query(collection(db, 'orders'), where('durum','==','devam'), orderBy('sonGuncelleme','desc'));
+        const snap = await getDocs(q);
+        const toDelete = snap.docs.filter(d => (d.data().sonGuncelleme?.toDate?.() || new Date(0)) < cutoff);
+        await Promise.all(toDelete.map(d => deleteDoc(doc(db,'orders',d.id))));
+        const active = snap.docs
+          .filter(d => (d.data().sonGuncelleme?.toDate?.() || new Date(0)) >= cutoff)
+          .map(d => ({ id:d.id, ...d.data() }));
+        setDraftOrders(active);
+      } catch {}
+      setDraftsLoading(false);
+    };
+    loadDrafts();
+  }, [view]);
 
   const parseFile = useCallback(async (file) => {
     if (!file) return;
@@ -1278,6 +1328,21 @@ export default function SiparisKontrol({ navigate }) {
         };
       });
 
+      // Firestore'a taslak olarak kaydet
+      const draftRef = await addDoc(collection(db, 'orders'), {
+        irsaliyeNo: parsed.irsaliyeNo || '',
+        cariIsim: parsed.cariIsim || '',
+        tarih: Timestamp.now(),
+        operator: '',
+        operatorId: '',
+        items: enriched.map(i => ({ ...i, taranan:0 })),
+        durum: 'devam',
+        counts: {},
+        sonGuncelleme: Timestamp.now(),
+      });
+
+      setOrderId(draftRef.id);
+      setInitialCounts({});
       setItems(enriched);
       setIrsal({
         irsaliyeNo:parsed.irsaliyeNo || '',
@@ -1361,6 +1426,15 @@ export default function SiparisKontrol({ navigate }) {
           return;
         }
 
+        // Firestore'a taslak olarak kaydet
+        addDoc(collection(db, 'orders'), {
+          irsaliyeNo: '', cariIsim: '',
+          tarih: Timestamp.now(), operator: '', operatorId: '',
+          items: parsed.map(i => ({ ...i, taranan:0 })),
+          durum: 'devam', counts: {}, sonGuncelleme: Timestamp.now(),
+        }).then(ref => setOrderId(ref.id)).catch(() => {});
+
+        setInitialCounts({});
         setItems(parsed);
         setIrsal({});
         setView('scan');
@@ -1378,8 +1452,10 @@ export default function SiparisKontrol({ navigate }) {
       <ScanSession
         items={items}
         irsaliyeInfo={irsaliyeInfo}
-        onDone={() => setView('list')}
-        onBack={() => setView('list')}
+        orderId={orderId}
+        initialCounts={initialCounts}
+        onDone={() => { setOrderId(null); setInitialCounts({}); setView('list'); }}
+        onBack={() => { setOrderId(null); setInitialCounts({}); setView('list'); }}
       />
     );
   }
@@ -1405,6 +1481,77 @@ export default function SiparisKontrol({ navigate }) {
           </div>
         ) : (
           <>
+            {/* Yarım kalan siparişler */}
+            {(draftsLoading || draftOrders.length > 0) && (
+              <div style={{ marginBottom:20 }}>
+                <p style={{ fontSize:12, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:1, marginBottom:10 }}>
+                  ⏸ Devam Eden Siparişler
+                </p>
+
+                {draftsLoading ? (
+                  <p style={{ fontSize:13, color:'#94a3b8', textAlign:'center', padding:'12px 0' }}>Yükleniyor...</p>
+                ) : (
+                  draftOrders.map(order => {
+                    const scanned = Object.values(order.counts || {}).reduce((a,b) => a+b, 0);
+                    const total = (order.items || []).reduce((a,i) => a+i.beklenen, 0);
+                    const pct = total ? Math.round(scanned/total*100) : 0;
+                    const tarih = order.sonGuncelleme?.toDate?.()?.toLocaleDateString('tr-TR') || '';
+
+                    return (
+                      <div
+                        key={order.id}
+                        style={{
+                          background:'#fff',
+                          border:'1px solid #e2e8f0',
+                          borderRadius:14,
+                          padding:'12px 16px',
+                          marginBottom:10,
+                          display:'flex',
+                          alignItems:'center',
+                          gap:12,
+                        }}
+                      >
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <p style={{ fontWeight:600, fontSize:14, color:'#1e293b', marginBottom:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                            {order.cariIsim || order.irsaliyeNo || 'İsimsiz'}
+                          </p>
+                          <p style={{ fontSize:11, color:'#94a3b8' }}>
+                            {order.irsaliyeNo && <span style={{ marginRight:8 }}>{order.irsaliyeNo}</span>}
+                            {(order.items||[]).length} kalem · %{pct} tamamlandı · {tarih}
+                          </p>
+                          <div style={{ marginTop:6, height:4, background:'#e2e8f0', borderRadius:2, overflow:'hidden' }}>
+                            <div style={{ height:'100%', width:`${pct}%`, background:'#3b82f6', borderRadius:2, transition:'width .3s' }} />
+                          </div>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            setOrderId(order.id);
+                            setInitialCounts(order.counts || {});
+                            setItems(order.items || []);
+                            setIrsal({ irsaliyeNo:order.irsaliyeNo||'', cariIsim:order.cariIsim||'' });
+                            setView('scan');
+                          }}
+                          style={{
+                            background:'#3b82f6',
+                            color:'#fff',
+                            border:'none',
+                            borderRadius:10,
+                            padding:'8px 14px',
+                            fontSize:13,
+                            fontWeight:600,
+                            cursor:'pointer',
+                            whiteSpace:'nowrap',
+                          }}
+                        >
+                          Devam Et →
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+
             <div
               onDragOver={e => {
                 e.preventDefault();
