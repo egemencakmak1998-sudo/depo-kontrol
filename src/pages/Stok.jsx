@@ -48,7 +48,10 @@ function ProductRow({ p, isAdmin, onAdjust }) {
           color: kritik ? '#ef4444' : low ? '#d97706' : '#1e293b' }}>
           {miktar !== null ? miktar : '—'}
         </p>
-        <p style={{ fontSize:10, color:'#94a3b8' }}>adet</p>
+        <p style={{ fontSize:10, color:'#94a3b8' }}>
+          {p.totalMiktar !== undefined && p.totalMiktar !== miktar
+            ? `toplam: ${p.totalMiktar}` : 'adet'}
+        </p>
       </div>
       {isAdmin && onAdjust && (
         <button onClick={() => onAdjust(p)}
@@ -107,9 +110,14 @@ export default function Stok() {
         where('locations','array-contains', rafKod)));
       const prods = snap.docs.map(d => ({ id:d.id, ...d.data() }));
       const withStock = await Promise.all(prods.map(async p => {
-        if (!p.ean) return { ...p, miktar:null };
+        if (!p.ean) return { ...p, miktar:null, totalMiktar:null };
         const s = await getDoc(doc(db,'stock',p.ean));
-        return { ...p, miktar: s.exists() ? (s.data().miktar ?? null) : null };
+        if (!s.exists()) return { ...p, miktar:null, totalMiktar:null };
+        const data = s.data();
+        // Lokasyona özgü miktar varsa onu göster, yoksa toplam
+        const lokMiktar = data.byLocation?.[rafKod] ?? null;
+        const totalMiktar = data.miktar ?? null;
+        return { ...p, miktar: lokMiktar !== null ? lokMiktar : totalMiktar, totalMiktar };
       }));
       setRafProds(withStock.sort((a,b) => (a.urunAdi||'').localeCompare(b.urunAdi||'')));
     } catch (e) { toast$('Hata: '+e.message,'error'); }
@@ -206,21 +214,23 @@ export default function Stok() {
           const ws = wb.Sheets[wb.SheetNames[0]];
           const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
 
-          // Header detection
-          let hIdx=-1, cEan=-1, cCode=-1, cMiktar=-1, cUrun=-1;
-          for (let r=0; r<Math.min(rows.length,20); r++) {
-            const cells = rows[r].map(c=>String(c).toLowerCase().replace(/\s+/g,' ').trim());
-            let hasEan=false, hasMiktar=false;
+          // Header detection - esnek
+          let hIdx=0, cEan=-1, cCode=-1, cMiktar=-1, cUrun=-1;
+          for (let r=0; r<Math.min(rows.length,10); r++) {
+            const cells = rows[r].map(c=>String(c||'').toLowerCase().replace(/\s+/g,' ').trim());
+            let score=0;
             cells.forEach((cell,j) => {
-              if (/ean|barkod|barcode/.test(cell)) { cEan=j; hasEan=true; }
-              if (/(malzeme|stok|ürün|item)\s*(kodu?|code?)/.test(cell) && cCode<0) cCode=j;
-              if (/miktar|adet|qty|quantity|kullanılabilir|kullan/.test(cell) && cMiktar<0) cMiktar=j;
+              if (/ean|barkod|barcode/.test(cell) && cEan<0) { cEan=j; score++; }
+              if (/(malzeme|stok|item)\s*(kodu?|code?)/.test(cell) && cCode<0) { cCode=j; score++; }
+              if (/miktar|adet|qty|quantity|kullan/.test(cell) && cMiktar<0) { cMiktar=j; score++; }
               if (/açıklama|aciklama|ürün ad|description/.test(cell) && cUrun<0) cUrun=j;
             });
-            if (hasEan && hasMiktar) { hIdx=r; break; }
+            if (score>=2) { hIdx=r; break; }
           }
-          if (hIdx<0 || cMiktar<0) {
-            toast$('EAN ve Miktar sütunları bulunamadı','error');
+          // Son sütunu miktar olarak dene
+          if (cMiktar<0 && rows[hIdx]?.length>0) cMiktar=rows[hIdx].length-1;
+          if (cMiktar<0) {
+            toast$('Miktar sütunu bulunamadı','error');
             setImpLoading(false); return;
           }
 
@@ -236,17 +246,43 @@ export default function Stok() {
           const movBatch = writeBatch(db);
           const stockBatch = writeBatch(db);
 
+          // Lokasyon sütunu var mı?
+          let cLok = -1;
+          if (rows[hIdx]) {
+            rows[hIdx].map(c=>String(c||'').toLowerCase().trim()).forEach((cell,j) => {
+              if (/lokasyon|location/.test(cell) && cLok<0) cLok=j;
+            });
+          }
+
+          // Önce tüm satırları oku, EAN başına byLocation ve toplam miktar hesapla
+          const eanDataMap = {};
           rows.slice(hIdx+1).forEach(row => {
             const ean = String(row[cEan]||'').trim();
             const miktar = parseInt(String(row[cMiktar]||'0').replace(/\D/g,''),10)||0;
             if (!ean || !miktar) return;
             const urunAdi = cUrun>=0?String(row[cUrun]||'').trim():'';
             const malzemeKodu = cCode>=0?String(row[cCode]||'').trim():'';
+            const lokasyon = cLok>=0?String(row[cLok]||'').trim():'';
 
-            stockBatch.set(doc(db,'stock',ean), { ean, miktar, urunAdi, malzemeKodu, sonGuncelleme:now });
+            if (!eanDataMap[ean]) {
+              eanDataMap[ean] = { ean, urunAdi, malzemeKodu, miktar:0, byLocation:{} };
+            }
+            eanDataMap[ean].miktar += miktar;
+            if (lokasyon) {
+              eanDataMap[ean].byLocation[lokasyon] = (eanDataMap[ean].byLocation[lokasyon]||0) + miktar;
+            }
+          });
+
+          Object.values(eanDataMap).forEach(item => {
+            stockBatch.set(doc(db,'stock',item.ean), {
+              ean:item.ean, miktar:item.miktar,
+              urunAdi:item.urunAdi, malzemeKodu:item.malzemeKodu,
+              byLocation:item.byLocation, sonGuncelleme:now
+            });
             movBatch.set(doc(collection(db,'stockMovements')), {
-              tarih:now, tip:'kök_stok', ean, malzemeKodu, urunAdi,
-              miktar, oncekiMiktar:0, sonrakiMiktar:miktar,
+              tarih:now, tip:'kök_stok', ean:item.ean,
+              malzemeKodu:item.malzemeKodu, urunAdi:item.urunAdi,
+              miktar:item.miktar, oncekiMiktar:0, sonrakiMiktar:item.miktar,
               kaynak:'excel_kök_stok', yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
             });
             count++;
