@@ -7,6 +7,7 @@ import IadeKontrol from './pages/IadeKontrol.jsx';
 import DepoSayimi from './pages/DepoSayimi.jsx';
 import Raporlar from './pages/Raporlar.jsx';
 import YoneticiPanel from './pages/YoneticiPanel.jsx';
+import Stok from './pages/Stok.jsx';
 import Layout from './components/Layout.jsx';
 
 export default function App() {
@@ -27,7 +28,7 @@ export default function App() {
 
   if (!user) return <Login />;
 
-  const pages = { dashboard: Dashboard, siparis: SiparisKontrol, iade: IadeKontrol, sayim: DepoSayimi, raporlar: Raporlar, yonetici: YoneticiPanel };
+  const pages = { dashboard: Dashboard, siparis: SiparisKontrol, iade: IadeKontrol, sayim: DepoSayimi, raporlar: Raporlar, stok: Stok, yonetici: YoneticiPanel };
   const PageComponent = pages[page] || Dashboard;
 
   return (
