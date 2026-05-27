@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { collection, getDocs, doc, updateDoc, orderBy, query, limit, Timestamp } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, orderBy, query, limit, Timestamp, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import * as XLSX from 'xlsx';
 
@@ -36,7 +36,7 @@ function KargoImportModal({ onDone, onClose }) {
   const toast$ = (msg,type)=>setToast({msg,type,id:Date.now()});
 
   useEffect(()=>{
-    getDocs(query(collection(db,'orders'),orderBy('tarih','desc'),limit(200)))
+    getDocs(query(collection(db,'orders'),where('durum','==','tamamlandi'),orderBy('tarih','desc'),limit(200)))
       .then(snap=>setOrders(snap.docs.map(d=>({id:d.id,...d.data()}))));
   },[]);
 
@@ -144,7 +144,7 @@ export default function Raporlar({ profile }) {
     setLoading(true);
     try {
       const [oSnap,rSnap]=await Promise.all([
-        getDocs(query(collection(db,'orders'),orderBy('tarih','desc'),limit(100))),
+        getDocs(query(collection(db,'orders'),where('durum','==','tamamlandi'),orderBy('tarih','desc'),limit(100))),
         getDocs(query(collection(db,'returns'),orderBy('tarih','desc'),limit(100))),
       ]);
       setOrders(oSnap.docs.map(d=>({id:d.id,...d.data()})));
