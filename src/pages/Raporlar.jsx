@@ -11,16 +11,87 @@ function Toast({ msg, type, onDone }) {
 
 /* ── KARGO MODAL ─────────────────────────────────────── */
 function KargoModal({ order, onSave, onClose }) {
-  const [takipNo, setTakipNo] = useState(order.kargoTakipNo||'');
+  const [takipNo, setTakipNo] = useState(order.kargoTakipNo || '');
+  const [firma, setFirma] = useState(order.kargoFirmasi || 'Yurtiçi Kargo');
+
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.5)',display:'flex',alignItems:'flex-end',justifyContent:'center',zIndex:200}}>
       <div style={{background:'#fff',borderRadius:'20px 20px 0 0',padding:24,width:'100%',maxWidth:500}}>
-        <h3 style={{fontSize:16,fontWeight:700,color:'#0f172a',marginBottom:8}}>Kargo Takip No</h3>
+        <h3 style={{fontSize:16,fontWeight:700,color:'#0f172a',marginBottom:8}}>Kargo Bilgisi Düzenle</h3>
         <p style={{fontSize:13,color:'#64748b',marginBottom:16}}>{order.irsaliyeNo||'—'} · {order.cariIsim||'—'}</p>
+
+        <label style={{fontSize:12,fontWeight:700,color:'#64748b',display:'block',marginBottom:6}}>KARGO FİRMASI</label>
+        <input value={firma} onChange={e=>setFirma(e.target.value)} placeholder="Kargo firması" style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'12px',fontSize:14,outline:'none',marginBottom:12}} onFocus={e=>e.target.style.borderColor='#3b82f6'} onBlur={e=>e.target.style.borderColor='#e2e8f0'} />
+
+        <label style={{fontSize:12,fontWeight:700,color:'#64748b',display:'block',marginBottom:6}}>KARGO TAKİP NO</label>
         <input value={takipNo} onChange={e=>setTakipNo(e.target.value)} placeholder="Yurtiçi Kargo takip numarası" style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'12px',fontSize:14,outline:'none',marginBottom:16,fontFamily:'monospace'}} onFocus={e=>e.target.style.borderColor='#3b82f6'} onBlur={e=>e.target.style.borderColor='#e2e8f0'} />
+
         <div style={{display:'flex',gap:10}}>
           <button onClick={onClose} style={{flex:1,padding:'12px',borderRadius:12,border:'2px solid #e2e8f0',background:'#fff',color:'#64748b',fontWeight:600,cursor:'pointer'}}>İptal</button>
-          <button onClick={()=>onSave(takipNo)} style={{flex:2,padding:'12px',borderRadius:12,border:'none',background:'linear-gradient(135deg,#3b82f6,#6366f1)',color:'#fff',fontWeight:700,cursor:'pointer'}}>Kaydet</button>
+          <button onClick={()=>onSave({takipNo,firma})} style={{flex:2,padding:'12px',borderRadius:12,border:'none',background:'linear-gradient(135deg,#3b82f6,#6366f1)',color:'#fff',fontWeight:700,cursor:'pointer'}}>Güncelle</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── KOLİ MODAL ─────────────────────────────────────── */
+function KoliModal({ order, onSave, onClose }) {
+  const current = order.koliInfo || {};
+  const [tur, setTur] = useState(current.tur || 'koli');
+  const [koli, setKoli] = useState(String(current.koli || ''));
+  const [palet, setPalet] = useState(String(current.palet || '1'));
+  const [koliP, setKoliP] = useState(String(current.koli || ''));
+
+  const save = () => {
+    if (tur === 'koli') {
+      const koliNum = parseInt(koli, 10) || 0;
+      onSave({ tur:'koli', koli:koliNum, label:koliNum ? `${koliNum} Koli` : '' });
+      return;
+    }
+
+    const paletNum = parseFloat(palet) || 0;
+    const koliNum = parseInt(koliP, 10) || 0;
+    onSave({ tur:'palet', palet:paletNum, koli:koliNum, label:`${paletNum} Palet + ${koliNum} Koli` });
+  };
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.5)',display:'flex',alignItems:'flex-end',justifyContent:'center',zIndex:200}}>
+      <div style={{background:'#fff',borderRadius:'20px 20px 0 0',padding:24,width:'100%',maxWidth:500}}>
+        <h3 style={{fontSize:16,fontWeight:700,color:'#0f172a',marginBottom:8}}>Koli / Palet Bilgisi Düzenle</h3>
+        <p style={{fontSize:13,color:'#64748b',marginBottom:16}}>{order.irsaliyeNo||'—'} · {order.cariIsim||'—'}</p>
+
+        <div style={{display:'flex',gap:8,marginBottom:20}}>
+          {[{v:'koli',l:'Sadece Koli'},{v:'palet',l:'Palet + Koli'}].map(({v,l})=>(
+            <button key={v} onClick={()=>setTur(v)} style={{flex:1,padding:'10px',borderRadius:10,border:`2px solid ${tur===v?'#3b82f6':'#e2e8f0'}`,background:tur===v?'#eff6ff':'#fff',color:tur===v?'#2563eb':'#64748b',fontWeight:600,cursor:'pointer',fontSize:13}}>{l}</button>
+          ))}
+        </div>
+
+        {tur==='koli' ? (
+          <div>
+            <label style={{fontSize:12,fontWeight:700,color:'#64748b',display:'block',marginBottom:6}}>KOLİ ADEDİ</label>
+            <input type="number" value={koli} onChange={e=>setKoli(e.target.value)} placeholder="örn: 12" style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'12px',fontSize:16,outline:'none'}} />
+          </div>
+        ) : (
+          <div style={{display:'flex',gap:12}}>
+            <div style={{flex:1}}>
+              <label style={{fontSize:12,fontWeight:700,color:'#64748b',display:'block',marginBottom:6}}>PALET</label>
+              <select value={palet} onChange={e=>setPalet(e.target.value)} style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'12px',fontSize:15,outline:'none',background:'#fff'}}>
+                <option value="1">1 Palet (Tam)</option>
+                <option value="0.5">0.5 Palet (Yarım)</option>
+                <option value="0">Palet Yok</option>
+              </select>
+            </div>
+            <div style={{flex:1}}>
+              <label style={{fontSize:12,fontWeight:700,color:'#64748b',display:'block',marginBottom:6}}>KOLİ ADEDİ</label>
+              <input type="number" value={koliP} onChange={e=>setKoliP(e.target.value)} placeholder="örn: 30" style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'12px',fontSize:16,outline:'none'}} />
+            </div>
+          </div>
+        )}
+
+        <div style={{display:'flex',gap:10,marginTop:20}}>
+          <button onClick={onClose} style={{flex:1,padding:'12px',borderRadius:12,border:'2px solid #e2e8f0',background:'#fff',color:'#64748b',fontWeight:600,cursor:'pointer'}}>İptal</button>
+          <button onClick={save} style={{flex:2,padding:'12px',borderRadius:12,border:'none',background:'linear-gradient(135deg,#3b82f6,#6366f1)',color:'#fff',fontWeight:700,cursor:'pointer'}}>Güncelle</button>
         </div>
       </div>
     </div>
@@ -146,6 +217,7 @@ export default function Raporlar({ profile }) {
   const [returns, setReturns]   = useState([]);
   const [loading, setLoading]   = useState(true);
   const [editKargo, setEK]      = useState(null);
+  const [editKoli, setEditKoli] = useState(null);
   const [showImport, setImport] = useState(false);
   const [toast, setToast]       = useState(null);
   const isAdmin = profile?.role==='admin';
@@ -174,13 +246,22 @@ export default function Raporlar({ profile }) {
 
   useEffect(()=>{loadData();},[loadData]);
 
-  const saveKargoNo = async (takipNo) => {
+  const saveKargoNo = async ({ takipNo, firma }) => {
     try {
-      await updateDoc(doc(db,'orders',editKargo.id),{kargoTakipNo:takipNo});
-      setOrders(prev=>prev.map(o=>o.id===editKargo.id?{...o,kargoTakipNo:takipNo}:o));
-      toast$('Takip numarası kaydedildi ✓','success');
+      await updateDoc(doc(db,'orders',editKargo.id),{kargoTakipNo:takipNo||'',kargoFirmasi:firma||''});
+      setOrders(prev=>prev.map(o=>o.id===editKargo.id?{...o,kargoTakipNo:takipNo||'',kargoFirmasi:firma||''}:o));
+      toast$('Kargo bilgisi güncellendi ✓','success');
     }catch(e){toast$('Hata: '+e.message,'error');}
     setEK(null);
+  };
+
+  const saveKoliInfo = async (koliInfo) => {
+    try {
+      await updateDoc(doc(db,'orders',editKoli.id),{koliInfo});
+      setOrders(prev=>prev.map(o=>o.id===editKoli.id?{...o,koliInfo}:o));
+      toast$('Koli / palet bilgisi güncellendi ✓','success');
+    }catch(e){toast$('Hata: '+e.message,'error');}
+    setEditKoli(null);
   };
 
   const exportOrders = () => {
@@ -270,13 +351,18 @@ export default function Raporlar({ profile }) {
                       {o.fazla>0&&<span style={{fontSize:11,color:'#dc2626'}}>❌ {o.fazla}</span>}
                       {o.koliInfo?.label&&<span style={{fontSize:11,color:'#6366f1'}}>📦 {o.koliInfo.label}</span>}
                     </div>
-                    <div style={{display:'flex',alignItems:'center',gap:8,marginTop:8}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,marginTop:8,flexWrap:'wrap'}}>
                       {o.kargoTakipNo?(
                         <span style={{fontSize:11,color:'#16a34a',fontFamily:'monospace',background:'#dcfce7',padding:'3px 8px',borderRadius:6}}>🚚 {o.kargoTakipNo}</span>
                       ):(
                         <span style={{fontSize:11,color:'#94a3b8'}}>Takip no yok</span>
                       )}
-                      {isAdmin&&<button onClick={()=>setEK(o)} style={{fontSize:11,color:'#3b82f6',background:'none',border:'1px solid #bfdbfe',borderRadius:6,padding:'3px 8px',cursor:'pointer'}}>✏️ Takip No</button>}
+                      {isAdmin&&(
+                        <>
+                          <button onClick={()=>setEditKoli(o)} style={{fontSize:11,color:'#6366f1',background:'none',border:'1px solid #c7d2fe',borderRadius:6,padding:'3px 8px',cursor:'pointer'}}>✏️ Koli</button>
+                          <button onClick={()=>setEK(o)} style={{fontSize:11,color:'#3b82f6',background:'none',border:'1px solid #bfdbfe',borderRadius:6,padding:'3px 8px',cursor:'pointer'}}>✏️ Kargo</button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -310,6 +396,7 @@ export default function Raporlar({ profile }) {
       </div>
 
       {editKargo&&<KargoModal order={editKargo} onSave={saveKargoNo} onClose={()=>setEK(null)} />}
+      {editKoli&&<KoliModal order={editKoli} onSave={saveKoliInfo} onClose={()=>setEditKoli(null)} />}
       {showImport&&<KargoImportModal onDone={()=>{setImport(false);loadData();}} onClose={()=>setImport(false)} />}
       {toast&&<Toast {...toast} onDone={()=>setToast(null)} />}
     </div>
