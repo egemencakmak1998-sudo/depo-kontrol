@@ -1115,6 +1115,30 @@ function ScanSession({ items, irsaliyeInfo, orderId, initialCounts, onDone, onBa
                   >
                     +
                   </button>
+
+                  {cnt !== item.beklenen && (
+                    <button
+                      type="button"
+                      onClick={() => setManualCount(item, item.beklenen)}
+                      title="Tam adedi gir"
+                      style={{
+                        height:28,
+                        paddingLeft:7,
+                        paddingRight:7,
+                        borderRadius:8,
+                        border:'1px solid #bfdbfe',
+                        background:'#eff6ff',
+                        color:'#2563eb',
+                        fontWeight:700,
+                        cursor:'pointer',
+                        fontSize:11,
+                        lineHeight:1,
+                        whiteSpace:'nowrap',
+                      }}
+                    >
+                      ={item.beklenen}
+                    </button>
+                  )}
                 </div>
               </div>
 
