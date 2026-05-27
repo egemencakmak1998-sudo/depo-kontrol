@@ -194,67 +194,44 @@ function Urunler() {
 
 /* ── LOKASYONLAR ─────────────────────────────────────── */
 function Lokasyonlar() {
-  const [loks, setLoks]     = useState([]);
-  const [importing, setImp] = useState(false);
-  const [toast, setToast]   = useState(null);
+  const [loks, setLoks] = useState([]);
+  const [cleaning, setCleaning] = useState(false);
+  const [toast, setToast] = useState(null);
   const toast$ = (msg,type='info')=>setToast({msg,type,id:Date.now()});
-
-  const load=async()=>{ const s=await getDocs(query(collection(db,'locations'),orderBy('kod'))); setLoks(s.docs.map(d=>({id:d.id,...d.data()}))); };
+  const load=async()=>{ const s=await getDocs(collection(db,'locations')); setLoks(s.docs.map(d=>({id:d.id,...d.data()}))); };
   useEffect(()=>{load();},[]);
-
-  const importExcel=async(file)=>{
-    setImp(true);
-    const reader=new FileReader();
-    reader.onload=async({target:{result}})=>{
-      try{
-        const wb=XLSX.read(new Uint8Array(result),{type:'array'});
-        const ws=wb.Sheets[wb.SheetNames[0]];
-        const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
-        let hIdx=-1,cKod=-1,cAcik=-1;
-        for(let r=0;r<Math.min(rows.length,10);r++){
-          const cells=rows[r].map(c=>String(c).toLowerCase().trim());
-          cells.forEach((c,j)=>{ if(/lokasyon|kod|location/.test(c)&&cKod<0) cKod=j; if(/açıklama|aciklama|desc/.test(c)&&cAcik<0) cAcik=j; });
-          if(cKod>=0){hIdx=r;break;}
-        }
-        if(hIdx<0&&rows.length>0){hIdx=0;cKod=0;cAcik=1;}
-        const batch=writeBatch(db);let count=0;
-        rows.slice(hIdx+1).forEach(row=>{ const kod=String(row[cKod]||'').trim(); if(!kod) return; const ref=doc(collection(db,'locations')); batch.set(ref,{kod,aciklama:cAcik>=0?String(row[cAcik]||'').trim():''}); count++; });
-        await batch.commit();
-        toast$(`${count} lokasyon yüklendi ✓`,'success'); load();
-      }catch(e){toast$('Hata: '+e.message,'error');}
-      finally{setImp(false);}
-    };
-    reader.readAsArrayBuffer(file);
+  const clearAll=async()=>{
+    if(!window.confirm(loks.length+' kayit silinecek. Emin misiniz?')) return;
+    setCleaning(true);
+    try {
+      const batch=writeBatch(db);
+      loks.forEach(l=>batch.delete(doc(db,'locations',l.id)));
+      await batch.commit();
+      setLoks([]);
+      toast$('Tum lokasyon kayitlari silindi','success');
+    } catch(e){toast$('Hata: '+e.message,'error');}
+    setCleaning(false);
   };
-
   return (
     <div>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
-        <p style={{fontWeight:700,color:'#0f172a',fontSize:15}}>📍 Lokasyonlar ({loks.length})</p>
-        <label style={{background:'linear-gradient(135deg,#10b981,#059669)',color:'#fff',padding:'7px 12px',borderRadius:10,fontSize:11,fontWeight:700,cursor:'pointer'}}>
-          {importing?'Yükleniyor...':'📥 Excel Yükle'}
-          <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>importExcel(e.target.files[0])} disabled={importing} />
-        </label>
+      <div style={{background:'#fef3c7',border:'1px solid #fde68a',borderRadius:12,padding:'12px 16px',marginBottom:16}}>
+        <p style={{fontWeight:700,color:'#92400e',fontSize:13,marginBottom:4}}>Bu sekme artik kullanilmiyor</p>
+        <p style={{fontSize:12,color:'#78350f'}}>Stok yonetimi icin soldaki menuден Stok sayfasina gidin.</p>
       </div>
-      <div style={{background:'#f8fafc',borderRadius:12,padding:'8px 12px',border:'1px solid #e2e8f0',marginBottom:12,fontSize:12,color:'#64748b'}}>
-        <p>Excel formatı: <b>Lokasyon Kodu · Açıklama (opsiyonel)</b></p>
-        <p style={{marginTop:3}}>Örnek: <span style={{fontFamily:'monospace'}}>11072B</span></p>
-      </div>
-      <div style={{maxHeight:400,overflowY:'auto'}}>
-        {loks.slice(0,100).map(l=>(
-          <div key={l.id} style={{background:'#fff',borderRadius:10,padding:'9px 12px',marginBottom:5,border:'1px solid #e2e8f0',display:'flex',gap:10,alignItems:'center'}}>
-            <span style={{fontFamily:'monospace',fontWeight:700,color:'#0f172a',fontSize:13,minWidth:80}}>{l.kod}</span>
-            {l.aciklama&&<span style={{fontSize:12,color:'#64748b'}}>{l.aciklama}</span>}
-          </div>
-        ))}
-        {loks.length===0&&<div style={{textAlign:'center',padding:'40px 0',color:'#94a3b8'}}><p style={{fontSize:32,marginBottom:8}}>📍</p><p style={{fontSize:13}}>Lokasyon listesi boş</p></div>}
-      </div>
+      {loks.length>0&&(
+        <div style={{background:'#fff',border:'1px solid #e2e8f0',borderRadius:12,padding:'14px 16px'}}>
+          <p style={{fontSize:13,color:'#64748b',marginBottom:10}}>Bu koleksiyonda <b>{loks.length}</b> eski kayit bulundu.</p>
+          <button onClick={clearAll} disabled={cleaning}
+            style={{background:'#ef4444',color:'#fff',border:'none',borderRadius:10,padding:'8px 16px',fontSize:13,fontWeight:700,cursor:'pointer',opacity:cleaning?0.6:1}}>
+            {cleaning?'Siliniyor...':'Tumunu Sil'}
+          </button>
+        </div>
+      )}
+      {loks.length===0&&<div style={{textAlign:'center',padding:'40px 0',color:'#94a3b8'}}><p>Koleksiyon bos</p></div>}
       {toast&&<Toast {...toast} onDone={()=>setToast(null)} />}
     </div>
   );
 }
-
-/* ── ONAYLAR ─────────────────────────────────────────── */
 function Onaylar() {
   const [returns, setReturns] = useState([]);
   const [sessions, setSessions] = useState([]);
