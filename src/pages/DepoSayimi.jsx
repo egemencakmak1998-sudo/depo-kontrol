@@ -182,7 +182,7 @@ function LokPicker({ onSelect, currentLok }) {
 }
 
 /* ── SAYIM EKRANI ── */
-function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBack, requireKnownProduct = false }) {
+function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBack, requireKnownProduct = false, referenceItems = [] }) {
   const { user, profile } = useAuth();
   const [entries, setEntries] = useState({});
   const [hasarlilar, setHasarlilar] = useState({});
@@ -214,6 +214,29 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
     return products[key] || null;
   },[products]);
 
+  const getRefKeys = useCallback((ref)=>{
+    const keys = new Set();
+    const ean = String(ref?.ean || '').trim();
+    const malzemeKodu = String(ref?.malzemeKodu || '').trim();
+    if(ean) keys.add(ean);
+    if(malzemeKodu) keys.add(malzemeKodu);
+    const p = products[ean] || products[malzemeKodu];
+    if(p?.ean) keys.add(String(p.ean).trim());
+    if(p?.malzemeKodu) keys.add(String(p.malzemeKodu).trim());
+    return keys;
+  },[products]);
+
+  const referenceKeySet = new Set();
+  (referenceItems || []).forEach(ref=>{
+    getRefKeys(ref).forEach(k=>referenceKeySet.add(k));
+  });
+
+  const getEntryCountForRef = (ref) => {
+    let total = 0;
+    getRefKeys(ref).forEach(k=>{ total += entries[k] || 0; });
+    return total;
+  };
+
   const addProductCode = useCallback((code)=>{
     const rawCode = String(code || '').trim();
     if(!rawCode) return false;
@@ -224,11 +247,20 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
       return false;
     }
 
+    if(requireKnownProduct && referenceItems.length > 0){
+      const possibleKeys = [rawCode, product?.ean, product?.malzemeKodu].filter(Boolean).map(k=>String(k).trim());
+      const inReference = possibleKeys.some(k=>referenceKeySet.has(k));
+      if(!inReference){
+        toast$(`Bu ürün referans dosyasında yok: ${rawCode}`,'error');
+        return false;
+      }
+    }
+
     const key = product?.ean || product?.malzemeKodu || rawCode;
     setEntries(prev=>({...prev,[key]:(prev[key]||0)+1}));
     toast$(product?.urunAdi || rawCode,'success');
     return true;
-  },[getProductByCode, requireKnownProduct]);
+  },[getProductByCode, requireKnownProduct, referenceItems, referenceKeySet]);
 
   const scan = useCallback(()=>{
     if(!videoRef.current||!detRef.current) return;
@@ -348,6 +380,41 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
       )}
 
       <div style={{padding:'0 16px 80px'}}>
+        {referenceItems.length>0&&(
+          <div style={{background:'#fff',border:'1px solid #e2e8f0',borderRadius:12,marginBottom:12,overflow:'hidden'}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,padding:'10px 12px',background:'#f8fafc',borderBottom:'1px solid #e2e8f0'}}>
+              <p style={{fontSize:13,fontWeight:800,color:'#1e293b',flex:1}}>📋 Referans Listesi</p>
+              <p style={{fontSize:11,color:'#64748b',fontWeight:600}}>
+                {referenceItems.filter(r=>getEntryCountForRef(r)===(r.beklenenAdet||0)).length} / {referenceItems.length} tamam
+              </p>
+            </div>
+            <div style={{maxHeight:360,overflowY:'auto'}}>
+              {referenceItems.map((ref,i)=>{
+                const sayilan = getEntryCountForRef(ref);
+                const beklenen = ref.beklenenAdet || 0;
+                const p = products[String(ref.ean || '').trim()] || products[String(ref.malzemeKodu || '').trim()] || {};
+                const urunAdi = ref.urunAdi || p.urunAdi || ref.malzemeKodu || ref.ean || '-';
+                const kod = ref.malzemeKodu || p.malzemeKodu || ref.ean || p.ean || '-';
+                const durum = sayilan === beklenen ? 'tamam' : sayilan > beklenen ? 'fazla' : sayilan > 0 ? 'eksik' : 'bekliyor';
+                const renk = durum === 'tamam' ? '#10b981' : durum === 'fazla' ? '#ef4444' : durum === 'eksik' ? '#f59e0b' : '#94a3b8';
+                const bg = durum === 'tamam' ? '#f0fdf4' : durum === 'fazla' ? '#fef2f2' : durum === 'eksik' ? '#fffbeb' : '#fff';
+                return (
+                  <div key={`${kod}-${i}`} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 12px',borderBottom:'1px solid #f1f5f9',background:bg}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <p style={{fontSize:12,fontWeight:700,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{urunAdi}</p>
+                      <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{kod}{ref.ean?` · ${ref.ean}`:''}</p>
+                    </div>
+                    <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
+                      <span style={{fontSize:12,fontWeight:800,color:renk}}>{sayilan}</span>
+                      <span style={{fontSize:11,color:'#94a3b8'}}> / {beklenen}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {showHasar&&itemList.length>0&&(
           <div style={{background:'#fef3c7',borderRadius:10,padding:'10px 12px',marginBottom:10,border:'1px solid #fde68a'}}>
             <p style={{fontSize:12,fontWeight:700,color:'#92400e',marginBottom:8}}>⚠️ Hasarlı Ürün Girişi</p>
@@ -367,7 +434,7 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
           </div>
         )}
 
-        {itemList.length===0&&<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'24px 0'}}>Henüz ürün taranmadı</p>}
+        {itemList.length===0&&referenceItems.length===0&&<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'24px 0'}}>Henüz ürün taranmadı</p>}
         {itemList.map(([ean,adet])=>{
           const p=products[ean]||{};
           const hasar=hasarlilar[ean]||0;
@@ -683,6 +750,7 @@ export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
     return <SayimEkrani lokasyon="MAL_KABUL" sessionId={activeSession.id}
       sessionTip="mal_kabul" products={products}
       requireKnownProduct={mkTur==='referansli'}
+      referenceItems={mkTur==='referansli' ? mkRef : []}
       onSubmit={(id,items)=>{setMkEntries(prev=>[...prev,{id,items}]);setView('mk_ozet');}}
       onBack={()=>setView('mk_ozet')}/>;
   }
@@ -1068,5 +1136,3 @@ function VasCard({ item, onSend }) {
     </div>
   );
 }
-
-                  
