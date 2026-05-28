@@ -326,46 +326,6 @@ function Urunler() {
   );
 }
 
-/* ── LOKASYONLAR ─────────────────────────────────────── */
-function Lokasyonlar() {
-  const [loks, setLoks] = useState([]);
-  const [cleaning, setCleaning] = useState(false);
-  const [toast, setToast] = useState(null);
-  const toast$ = (msg,type='info')=>setToast({msg,type,id:Date.now()});
-  const load=async()=>{ const s=await getDocs(collection(db,'locations')); setLoks(s.docs.map(d=>({id:d.id,...d.data()}))); };
-  useEffect(()=>{load();},[]);
-  const clearAll=async()=>{
-    if(!window.confirm(loks.length+' kayit silinecek. Emin misiniz?')) return;
-    setCleaning(true);
-    try {
-      const batch=writeBatch(db);
-      loks.forEach(l=>batch.delete(doc(db,'locations',l.id)));
-      await batch.commit();
-      setLoks([]);
-      toast$('Tum lokasyon kayitlari silindi','success');
-    } catch(e){toast$('Hata: '+e.message,'error');}
-    setCleaning(false);
-  };
-  return (
-    <div>
-      <div style={{background:'#fef3c7',border:'1px solid #fde68a',borderRadius:12,padding:'12px 16px',marginBottom:16}}>
-        <p style={{fontWeight:700,color:'#92400e',fontSize:13,marginBottom:4}}>Bu sekme artik kullanilmiyor</p>
-        <p style={{fontSize:12,color:'#78350f'}}>Stok yonetimi icin soldaki menuден Stok sayfasina gidin.</p>
-      </div>
-      {loks.length>0&&(
-        <div style={{background:'#fff',border:'1px solid #e2e8f0',borderRadius:12,padding:'14px 16px'}}>
-          <p style={{fontSize:13,color:'#64748b',marginBottom:10}}>Bu koleksiyonda <b>{loks.length}</b> eski kayit bulundu.</p>
-          <button onClick={clearAll} disabled={cleaning}
-            style={{background:'#ef4444',color:'#fff',border:'none',borderRadius:10,padding:'8px 16px',fontSize:13,fontWeight:700,cursor:'pointer',opacity:cleaning?0.6:1}}>
-            {cleaning?'Siliniyor...':'Tumunu Sil'}
-          </button>
-        </div>
-      )}
-      {loks.length===0&&<div style={{textAlign:'center',padding:'40px 0',color:'#94a3b8'}}><p>Koleksiyon bos</p></div>}
-      {toast&&<Toast {...toast} onDone={()=>setToast(null)} />}
-    </div>
-  );
-}
 function Onaylar() {
   const [returns, setReturns] = useState([]);
   const [sessions, setSessions] = useState([]);
@@ -493,7 +453,7 @@ export default function YoneticiPanel({ profile }) {
     <div style={{padding:40,textAlign:'center',color:'#94a3b8'}}><p style={{fontSize:48,marginBottom:12}}>🔒</p><p style={{fontSize:15,fontWeight:600}}>Bu sayfaya erişim yetkiniz yok</p></div>
   );
 
-  const tabs=[{id:'onaylar',lbl:'⏳ Onaylar'},{id:'urunler',lbl:'📦 Ürünler'},{id:'lokasyonlar',lbl:'📍 Lokasyonlar'},{id:'kullanicilar',lbl:'👥 Kullanıcılar'}];
+  const tabs=[{id:'onaylar',lbl:'⏳ Onaylar'},{id:'urunler',lbl:'📦 Ürünler'},{id:'kullanicilar',lbl:'👥 Kullanıcılar'}];
 
   return (
     <div>
@@ -506,7 +466,6 @@ export default function YoneticiPanel({ profile }) {
       <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
         {tab==='onaylar'&&<Onaylar />}
         {tab==='urunler'&&<Urunler />}
-        {tab==='lokasyonlar'&&<Lokasyonlar />}
         {tab==='kullanicilar'&&<Kullanicilar />}
       </div>
     </div>
