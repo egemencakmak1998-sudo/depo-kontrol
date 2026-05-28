@@ -5,6 +5,7 @@ import {
   getDocs,
   doc,
   updateDoc,
+  deleteDoc,
   query,
   where,
   orderBy,
@@ -967,7 +968,7 @@ export default function DepoSayimi() {
       null;
   }, [allEntries, user?.uid]);
 
-  const buildReport = useCallback((entries, session = activeSession) => {
+  const buildReport = useCallback((entries, session = activeSession, includeUncounted = false) => {
     const lokMap = {};
     const completedLokasyonlar = [];
 
@@ -979,11 +980,15 @@ export default function DepoSayimi() {
 
     const allLocations = new Set(Object.keys(lokMap));
 
-    if (session?.tip === 'referansli_sayim') {
+    // Aktif sayım sırasında henüz sayılmamış tüm depo lokasyonlarını
+    // sorunlu göstermemek için varsayılan olarak sadece sayılmış lokasyonlar rapora alınır.
+    // Sayım finalinde includeUncounted=true gönderilirse referans/stokta olup hiç sayılmayan
+    // lokasyonlar da eksik olarak rapora dahil edilir.
+    if (includeUncounted && session?.tip === 'referansli_sayim') {
       (session.referenceItems || []).forEach((r) => allLocations.add(r.lokasyon));
     }
 
-    if (session?.tip === 'manuel_sayim' || session?.tip === 'genel') {
+    if (includeUncounted && (session?.tip === 'manuel_sayim' || session?.tip === 'genel')) {
       stockRows.forEach((s) => {
         Object.keys(s.byLocation || {}).forEach((lok) => allLocations.add(lok));
       });
@@ -1087,6 +1092,32 @@ export default function DepoSayimi() {
     }
     setLoading(false);
   };
+
+  const deleteSession = async (session) => {
+    const label = sessionTypeLabel(session.tip);
+    if (!window.confirm(`"${label}" oturumu silinecek.
+
+Oturum silinse bile daha önce kaydedilmiş sayım girişleri korunur.
+
+Emin misiniz?`)) return;
+
+    try {
+      await deleteDoc(doc(db, 'countSessions', session.id));
+      setSessions((prev) => prev.filter((s) => s.id !== session.id));
+
+      if (activeSession?.id === session.id) {
+        setActiveSession(null);
+        setSelectedLok(null);
+        setAllEntries([]);
+        setView('list');
+      }
+
+      toast$('Oturum silindi', 'success');
+    } catch (e) {
+      toast$('Hata: ' + e.message, 'error');
+    }
+  };
+
 
   const parseReferenceFile = (file) => {
     const reader = new FileReader();
@@ -1272,7 +1303,7 @@ export default function DepoSayimi() {
       ? latestEntries.map((e) => (e.id === existing.id ? { ...e, ...payload, id: existing.id } : e))
       : latestEntries;
 
-    const report = buildReport(mergedEntries, activeSession);
+    const report = buildReport(mergedEntries, activeSession, false);
     await updateDoc(doc(db, 'countSessions', activeSession.id), {
       lokasyonOzetleri: report.lokasyonOzetleri,
       farkliUrunler: report.farkliUrunler,
@@ -1290,7 +1321,7 @@ export default function DepoSayimi() {
   const finalizeSession = async () => {
     if (!activeSession) return;
     const entries = await loadEntries(activeSession.id);
-    const report = buildReport(entries, activeSession);
+    const report = buildReport(entries, activeSession, true);
 
     await updateDoc(doc(db, 'countSessions', activeSession.id), {
       durum: 'tamamlandi',
@@ -1332,7 +1363,7 @@ export default function DepoSayimi() {
       });
     });
 
-    const report = buildReport(entries, session);
+    const report = buildReport(entries, session, true);
     const summaryRows = [
       ['Lokasyon', 'Durum', 'Fark Kalem', 'Eksik Kalem', 'Fazla Kalem', 'Beklenmeyen Kalem', 'Sayıldı mı'],
       ...report.lokasyonOzetleri.map((l) => [
@@ -1482,7 +1513,7 @@ export default function DepoSayimi() {
       : null;
 
     const report = buildReport(allEntries, activeSession);
-    const sorunlu = report.lokasyonOzetleri.filter((l) => l.durum === 'sorunlu');
+    const sorunlu = report.lokasyonOzetleri.filter((l) => l.durum === 'sorunlu' && l.sayildiMi);
 
     return (
       <div>
@@ -1589,7 +1620,7 @@ export default function DepoSayimi() {
   /* ── RAPOR ── */
   if (view === 'rapor' && activeSession) {
     const report = buildReport(allEntries, activeSession);
-    const sorunlu = report.lokasyonOzetleri.filter((l) => l.durum === 'sorunlu');
+    const sorunlu = report.lokasyonOzetleri.filter((l) => l.durum === 'sorunlu' && l.sayildiMi);
     const tamam = report.lokasyonOzetleri.filter((l) => l.durum === 'tamam');
 
     return (
@@ -1742,6 +1773,15 @@ export default function DepoSayimi() {
                   >
                     Devam →
                   </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => deleteSession(s)}
+                      title="Oturumu sil"
+                      style={{ ...S.btn, background: '#fee2e2', color: '#ef4444', padding: '8px 10px', fontSize: 13 }}
+                    >
+                      🗑
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
