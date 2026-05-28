@@ -85,6 +85,9 @@ function Urunler() {
   const [toast, setToast]       = useState(null);
   const [editingLoc, setEditingLoc] = useState(null);
   const [locValue, setLocValue] = useState('');
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [productForm, setProductForm] = useState({ urunAdi:'', ean:'', malzemeKodu:'', birim:'Adet' });
+  const [productFilter, setProductFilter] = useState('tum');
   const [showManual, setShowManual] = useState(false);
   const [savingManual, setSavingManual] = useState(false);
   const [manualForm, setManualForm] = useState({ urunAdi:'', ean:'', malzemeKodu:'' });
@@ -255,12 +258,58 @@ function Urunler() {
     } catch(e) { toast$('Hata: '+e.message,'error'); }
   };
 
-  const filtered=products.filter(p=>
-    p.urunAdi?.toLowerCase().includes(search.toLowerCase())||
-    p.ean?.includes(search)||
-    p.malzemeKodu?.toLowerCase().includes(search.toLowerCase())||
-    getLocationText(p).toLowerCase().includes(search.toLowerCase())
-  ).slice(0,50);
+  const openProductEdit = (p) => {
+    setEditingProduct(p);
+    setProductForm({
+      urunAdi: p.urunAdi || '',
+      ean: p.ean || '',
+      malzemeKodu: p.malzemeKodu || '',
+      birim: p.birim || 'Adet',
+    });
+  };
+
+  const saveProductInfo = async () => {
+    if (!editingProduct) return;
+    const urunAdi = productForm.urunAdi.trim();
+    const ean = productForm.ean.trim();
+    const malzemeKodu = productForm.malzemeKodu.trim().toUpperCase();
+    const birim = productForm.birim.trim() || 'Adet';
+
+    if (!urunAdi) { toast$('Ürün adı boş olamaz','error'); return; }
+    if (!ean && !malzemeKodu) { toast$('EAN veya malzeme kodu giriniz','error'); return; }
+
+    try {
+      await updateDoc(doc(db,'products',editingProduct.id), {
+        urunAdi,
+        ean,
+        malzemeKodu,
+        birim,
+        updatedAt: Timestamp.now(),
+      });
+      toast$('Ürün bilgisi güncellendi ✓','success');
+      setEditingProduct(null);
+      setProductForm({ urunAdi:'', ean:'', malzemeKodu:'', birim:'Adet' });
+      load();
+    } catch(e) { toast$('Hata: '+e.message,'error'); }
+  };
+
+  const matchesProductFilter = (p) => {
+    if (productFilter === 'eksikUrunAdi') return !String(p.urunAdi || '').trim();
+    if (productFilter === 'eksikEan') return !String(p.ean || '').trim();
+    if (productFilter === 'eksikMalzeme') return !String(p.malzemeKodu || '').trim();
+    if (productFilter === 'lokasyonYok') return p.lokasyonDurumu === 'atanmadi' || getLocations(p).includes('BELIRLENECEK');
+    return true;
+  };
+
+  const filtered=products.filter(p=>{
+    const q = search.toLowerCase();
+    const matchesSearch =
+      String(p.urunAdi||'').toLowerCase().includes(q)||
+      String(p.ean||'').includes(search)||
+      String(p.malzemeKodu||'').toLowerCase().includes(q)||
+      getLocationText(p).toLowerCase().includes(q);
+    return matchesSearch && matchesProductFilter(p);
+  }).slice(0,50);
 
   return (
     <div>
@@ -279,7 +328,21 @@ function Urunler() {
       <div style={{background:'#f8fafc',borderRadius:12,padding:'8px 12px',border:'1px solid #e2e8f0',marginBottom:12,fontSize:12,color:'#64748b'}}>
         <p>Excel formatı: <b>EAN Kodu · Malzeme Kodu · Ürün Adı · Birim</b> <span style={{color:'#94a3b8'}}>· Lokasyon opsiyonel, boşsa BELIRLENECEK atanır</span></p>
       </div>
-      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Ürün adı, EAN veya kod ile ara..." style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',marginBottom:12}} onFocus={e=>e.target.style.borderColor='#3b82f6'} onBlur={e=>e.target.style.borderColor='#e2e8f0'} />
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Ürün adı, EAN veya kod ile ara..." style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',marginBottom:10}} onFocus={e=>e.target.style.borderColor='#3b82f6'} onBlur={e=>e.target.style.borderColor='#e2e8f0'} />
+      <div style={{display:'flex',gap:6,overflowX:'auto',marginBottom:12,paddingBottom:2}}>
+        {[
+          ['tum','Tüm Ürünler'],
+          ['eksikUrunAdi','Eksik Ürün Adı'],
+          ['eksikEan','Eksik EAN'],
+          ['eksikMalzeme','Eksik Malzeme Kodu'],
+          ['lokasyonYok','Lokasyonu Belirlenmemiş'],
+        ].map(([key,label])=>(
+          <button key={key} onClick={()=>setProductFilter(key)}
+            style={{whiteSpace:'nowrap',border:'1px solid '+(productFilter===key?'#3b82f6':'#e2e8f0'),background:productFilter===key?'#eff6ff':'#fff',color:productFilter===key?'#1d4ed8':'#64748b',borderRadius:999,padding:'6px 10px',fontSize:11,fontWeight:700,cursor:'pointer'}}>
+            {label}
+          </button>
+        ))}
+      </div>
       {filtered.map(p=>(
         <div key={p.id} style={{background:'#fff',borderRadius:10,padding:'10px 12px',marginBottom:6,border:'1px solid #e2e8f0',display:'flex',gap:10,alignItems:'center'}}>
           <div style={{flex:1,minWidth:0}}>
@@ -287,6 +350,7 @@ function Urunler() {
             <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{p.malzemeKodu}{p.malzemeKodu?' · ':''}{p.ean}</p>
             <p style={{fontSize:10,color:p.lokasyonDurumu==='atanmadi'?'#f59e0b':'#64748b',fontFamily:'monospace',marginTop:3}}>📍 {getLocationText(p)}</p>
           </div>
+          <button onClick={()=>openProductEdit(p)} style={{fontSize:11,color:'#059669',background:'#ecfdf5',padding:'4px 8px',borderRadius:6,border:'1px solid #a7f3d0',fontWeight:700,cursor:'pointer',flexShrink:0}}>✏️ Ürün</button>
           <button onClick={()=>{setEditingLoc(p);setLocValue(getLocations(p).filter(l=>l!=='BELIRLENECEK').join(', '));}} style={{fontSize:11,color:'#2563eb',background:'#eff6ff',padding:'4px 8px',borderRadius:6,border:'1px solid #bfdbfe',fontWeight:700,cursor:'pointer',flexShrink:0}}>✏️ Lokasyon</button>
           <span style={{fontSize:11,color:'#64748b',background:'#f1f5f9',padding:'2px 8px',borderRadius:6,flexShrink:0}}>{p.birim||'Adet'}</span>
         </div>
@@ -302,6 +366,22 @@ function Urunler() {
             <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
               <button onClick={()=>{setShowManual(false);setManualForm({ urunAdi:'', ean:'', malzemeKodu:'' });}} disabled={savingManual} style={{background:'#f1f5f9',border:'none',color:'#475569',padding:'9px 14px',borderRadius:10,fontWeight:700,cursor:'pointer'}}>İptal</button>
               <button onClick={addManualProduct} disabled={savingManual} style={{background:'#10b981',border:'none',color:'#fff',padding:'9px 14px',borderRadius:10,fontWeight:700,cursor:'pointer',opacity:savingManual?0.6:1}}>{savingManual?'Ekleniyor...':'Ürünü Ekle'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {editingProduct&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(15,23,42,.45)',zIndex:9998,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+          <div style={{background:'#fff',borderRadius:16,padding:18,width:'100%',maxWidth:440,boxShadow:'0 20px 45px rgba(0,0,0,.2)'}}>
+            <p style={{fontSize:15,fontWeight:800,color:'#0f172a',marginBottom:4}}>Ürün Bilgisi Düzenle</p>
+            <p style={{fontSize:12,color:'#64748b',marginBottom:12}}>Boş veya hatalı ürün adlarını buradan düzeltebilirsin.</p>
+            <input value={productForm.urunAdi} onChange={e=>setProductForm(p=>({...p,urunAdi:e.target.value}))} placeholder="Ürün adı" style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',marginBottom:8}} />
+            <input value={productForm.ean} onChange={e=>setProductForm(p=>({...p,ean:e.target.value.replace(/\s/g,'')}))} placeholder="Barkod / EAN" inputMode="numeric" style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',fontFamily:'monospace',marginBottom:8}} />
+            <input value={productForm.malzemeKodu} onChange={e=>setProductForm(p=>({...p,malzemeKodu:e.target.value.toUpperCase()}))} placeholder="Malzeme kodu" style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',fontFamily:'monospace',marginBottom:8}} />
+            <input value={productForm.birim} onChange={e=>setProductForm(p=>({...p,birim:e.target.value}))} placeholder="Birim" style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',marginBottom:12}} />
+            <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+              <button onClick={()=>{setEditingProduct(null);setProductForm({ urunAdi:'', ean:'', malzemeKodu:'', birim:'Adet' });}} style={{background:'#f1f5f9',border:'none',color:'#475569',padding:'9px 14px',borderRadius:10,fontWeight:700,cursor:'pointer'}}>İptal</button>
+              <button onClick={saveProductInfo} style={{background:'#10b981',border:'none',color:'#fff',padding:'9px 14px',borderRadius:10,fontWeight:700,cursor:'pointer'}}>Kaydet</button>
             </div>
           </div>
         </div>
