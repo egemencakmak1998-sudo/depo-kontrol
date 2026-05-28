@@ -7,6 +7,7 @@ import IadeKontrol from './pages/IadeKontrol.jsx';
 import DepoSayimi from './pages/DepoSayimi.jsx';
 import MalKabul from './pages/MalKabul.jsx';
 import Raporlar from './pages/Raporlar.jsx';
+import DosyaAraclari from './pages/DosyaAraclari.jsx';
 import YoneticiPanel from './pages/YoneticiPanel.jsx';
 import Stok from './pages/Stok.jsx';
 import Layout from './components/Layout.jsx';
@@ -41,6 +42,7 @@ export default function App() {
     sayim: DepoSayimi,
     malkabul: MalKabul,
     raporlar: Raporlar,
+    dosyaaraclari: DosyaAraclari,
     stok: Stok,
     yonetici: YoneticiPanel,
   };
