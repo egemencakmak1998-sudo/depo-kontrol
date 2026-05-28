@@ -18,6 +18,16 @@ function Toast({ msg, type, onDone }) {
   );
 }
 
+const RAF_LIMITS = {
+  '109': { start: 13, end: 117 },
+  '110': { start: 14, end: 117 }
+};
+const getRafRange = (koridor) => RAF_LIMITS[koridor] || RAF_LIMITS['109'];
+const getRafList = (koridor) => {
+  const { start, end } = getRafRange(koridor);
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+};
+
 /* ── Product Row ─────────────────────────────────── */
 function ProductRow({ p, isAdmin, onAdjust }) {
   const miktar = p.miktar ?? null;
@@ -403,7 +413,7 @@ export default function Stok() {
             });
 
           setSevkiyatPreview({ items: previewItems, lokasyonlar: {} });
-          toast$(`${previewItems.length} ürün bulundu — lokasyon girin`, 'info');
+          toast$(`${previewItems.length} ürün bulundu — lokasyon girilebilir, boşsa BELIRLENECEK atanır`, 'info');
         } catch(e) { toast$('Hata: '+e.message,'error'); }
         setImpLoading(false);
       };
@@ -428,8 +438,7 @@ export default function Stok() {
   const saveSevkiyatWithLok = async () => {
     if (!sevkiyatPreview) return;
     const { items, lokasyonlar } = sevkiyatPreview;
-    const missingLok = items.find(i => !lokasyonlar[i.ean]);
-    if (missingLok) { toast$(`${missingLok.urunAdi||missingLok.ean} için lokasyon giriniz`, 'error'); return; }
+    // Lokasyon zorunlu değil: boş bırakılan ürünler BELIRLENECEK alanına alınır, sonra güncellenebilir.
     setImpLoading(true);
     try {
       const now = Timestamp.now();
@@ -443,7 +452,7 @@ export default function Stok() {
       items.forEach(item => {
         const prev = stockMap[item.ean]?.miktar || 0;
         const next = prev + item.miktar;
-        const lok = lokasyonlar[item.ean];
+        const lok = lokasyonlar[item.ean] || 'BELIRLENECEK';
         const prevByLok = stockMap[item.ean]?.byLocation || {};
         const newByLok = { ...prevByLok, [lok]: (prevByLok[lok]||0) + item.miktar };
 
@@ -464,7 +473,7 @@ export default function Stok() {
       await batch.commit();
       await movBatch.commit();
       setSevkiyatPreview(null);
-      toast$(`${items.length} ürün lokasyonlarıyla stoğa eklendi ✓`, 'success');
+      toast$(`${items.length} ürün stoğa eklendi ✓`, 'success');
       loadStats();
     } catch(e) { toast$('Hata: '+e.message, 'error'); }
     setImpLoading(false);
@@ -637,11 +646,11 @@ export default function Stok() {
             <div style={S.card}>
               <p style={{ fontSize:12, fontWeight:700, color:'#64748b', marginBottom:10,
                 textTransform:'uppercase', letterSpacing:1 }}>
-                Raf {raf ? `— Seçili: ${raf}` : ''}
+                Raf {raf ? `— Seçili: ${raf}` : `(${getRafRange(koridor).start}-${getRafRange(koridor).end})`}
               </p>
               <div style={{ display:'grid', gridTemplateColumns:'repeat(8,1fr)', gap:5,
                 maxHeight:200, overflowY:'auto' }}>
-                {Array.from({length:114}, (_,i)=>i+1).map(n => (
+                {getRafList(koridor).map(n => (
                   <button key={n} onClick={() => setRaf(n)}
                     style={{ padding:'6px 0', border:'none', borderRadius:6, fontSize:12,
                       fontWeight:600, cursor:'pointer',
@@ -849,7 +858,7 @@ export default function Stok() {
                   </div>
                   {/* Toplu lokasyon */}
                   <div style={{ background:'#f0fdf4', borderRadius:10, padding:'10px 12px', marginBottom:10, border:'1px solid #bbf7d0' }}>
-                    <p style={{ fontSize:11, fontWeight:700, color:'#15803d', marginBottom:6 }}>Tümüne aynı lokasyon uygula:</p>
+                    <p style={{ fontSize:11, fontWeight:700, color:'#15803d', marginBottom:6 }}>Tümüne aynı lokasyon uygula <span style={{color:'#64748b',fontWeight:500}}>(opsiyonel)</span>:</p>
                     <input placeholder="Örn: A109S013B"
                       style={{ ...S.input, fontFamily:'monospace' }}
                       onChange={e => {
@@ -872,7 +881,7 @@ export default function Stok() {
                         </p>
                         <p style={{ fontSize:10, color:'#94a3b8' }}>{item.miktar} adet eklenecek</p>
                       </div>
-                      <input placeholder="Lokasyon"
+                      <input placeholder="BELIRLENECEK"
                         value={sevkiyatPreview.lokasyonlar[item.ean]||''}
                         onChange={e => setSevkiyatPreview(prev => ({
                           ...prev,
@@ -886,7 +895,7 @@ export default function Stok() {
                   <button onClick={saveSevkiyatWithLok} disabled={impLoading}
                     style={{ ...S.btn, width:'100%', marginTop:10, background:'#10b981', color:'#fff',
                       opacity:impLoading?0.6:1 }}>
-                    {impLoading ? 'Kaydediliyor...' : '✅ Lokasyonlarla Kaydet'}
+                    {impLoading ? 'Kaydediliyor...' : '✅ Stoğa Kaydet'}
                   </button>
                 </div>
               )}
@@ -969,11 +978,11 @@ export default function Stok() {
                       </div>
                       {/* Raf */}
                       <p style={{ fontSize:11, fontWeight:700, color:'#64748b', marginBottom:6 }}>
-                        RAF {lokRaf?`— ${lokRaf}`:''}
+                        RAF {lokRaf?`— ${lokRaf}`:`(${getRafRange(lokKoridor).start}-${getRafRange(lokKoridor).end})`}
                       </p>
                       <div style={{ display:'grid', gridTemplateColumns:'repeat(8,1fr)',
                         gap:4, maxHeight:160, overflowY:'auto', marginBottom:10 }}>
-                        {Array.from({length:114},(_,i)=>i+1).map(n=>(
+                        {getRafList(lokKoridor).map(n=>(
                           <button key={n} onClick={()=>{ setLokRaf(n); setLokKat(null);
                             setManualLok(''); }}
                             style={{ padding:'5px 0', border:'none', borderRadius:5,
