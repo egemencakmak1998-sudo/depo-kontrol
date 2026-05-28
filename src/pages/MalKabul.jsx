@@ -484,7 +484,6 @@ export default function MalKabul() {
   // VAS
   const [vasItems, setVasItems] = useState({});
   const [mkLokasyonlar, setMkLokasyonlar] = useState({}); // ean -> lokasyon (mal kabul direkt)
-  const [mkTopluLokasyon, setMkTopluLokasyon] = useState('');
   const [vasSessionId, setVasSessionId] = useState(null);
   const [vasList, setVasList] = useState([]);
 
@@ -667,7 +666,6 @@ export default function MalKabul() {
     setMkRef(s.referenceItems || []);
     setVasItems(s.vasTransferItems || {});
     setMkLokasyonlar(s.mkLokasyonlar || {});
-    setMkTopluLokasyon('');
     const entries = await loadEntries(s.id);
     setMkEntries(entries.map(e=>({id:e.id,items:e.items||[]})));
     setView(entries.length>0 ? 'mk_ozet' : 'mk_sayim');
@@ -682,61 +680,6 @@ export default function MalKabul() {
         updatedAt:Timestamp.now()
       });
     }catch(e){/* offline/permission durumunda ekran akışını bozma */}
-  };
-
-  const getItemKey = (item) => String(item?.ean || item?.malzemeKodu || '').trim();
-
-  const itemMatches = (a,b) => {
-    const aEan=String(a?.ean||'').trim();
-    const aKod=String(a?.malzemeKodu||'').trim();
-    const bEan=String(b?.ean||'').trim();
-    const bKod=String(b?.malzemeKodu||'').trim();
-    return (aEan&&bEan&&aEan===bEan) || (aKod&&bKod&&aKod===bKod) || (aEan&&bKod&&aEan===bKod) || (aKod&&bEan&&aKod===bEan);
-  };
-
-  const updateMalKabulItemAdet = async (targetItem, nextAdetRaw) => {
-    const nextAdet = Math.max(0, parseInt(nextAdetRaw)||0);
-    let placed = false;
-    const updates = [];
-
-    const nextEntries = mkEntries.map(entry => {
-      const nextItems = (entry.items||[]).map(item => {
-        if(!itemMatches(item,targetItem)) return item;
-        if(!placed){
-          placed = true;
-          return {
-            ...item,
-            adet: nextAdet,
-            hasarliAdet: Math.min(item.hasarliAdet||0,nextAdet)
-          };
-        }
-        return { ...item, adet:0, hasarliAdet:0 };
-      }).filter(item => (item.adet||0)>0);
-      updates.push({ id:entry.id, items:nextItems });
-      return { ...entry, items:nextItems };
-    });
-
-    setMkEntries(nextEntries);
-
-    const key = getItemKey(targetItem);
-    const nextVasItems = { ...vasItems };
-    if(nextAdet===0){
-      delete nextVasItems[key];
-    }else if((nextVasItems[key]||0)>0){
-      nextVasItems[key]=nextAdet;
-    }
-    setVasItems(nextVasItems);
-    persistMalKabulOptions(nextVasItems,mkLokasyonlar);
-
-    try {
-      await Promise.all(updates.filter(u=>u.id).map(u=>updateDoc(doc(db,'countEntries',u.id),{
-        items:u.items,
-        updatedAt:Timestamp.now()
-      })));
-      toast$('Adet güncellendi','success');
-    }catch(e){
-      toast$('Adet ekranda güncellendi ama kayıt sırasında hata oluştu: '+e.message,'warning');
-    }
   };
 
   /* ── MAL KABUL ONAY + VAS AYRIMI ── */
@@ -1012,16 +955,7 @@ export default function MalKabul() {
                   <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:'1px solid #f1f5f9'}}>
                     <div style={{flex:1,minWidth:0}}>
                       <p style={{fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
-                      <p style={{fontSize:10,color:'#94a3b8'}}>Sayılan: {item.adet}{selected?' · VAS olarak işaretlendi, onay sonrası VAS listesine düşer':''}{item.hasarliAdet>0?` · ⚠️${item.hasarliAdet} hasarlı`:''}</p>
-                    </div>
-                    <div style={{display:'flex',alignItems:'center',gap:5,flexShrink:0}}>
-                      <button onClick={()=>updateMalKabulItemAdet(item,item.adet-1)}
-                        style={{width:26,height:26,borderRadius:6,border:'1px solid #cbd5e1',background:'#f8fafc',cursor:'pointer',fontWeight:700,fontSize:15}}>−</button>
-                      <input type="number" min="0" value={item.adet}
-                        onChange={e=>updateMalKabulItemAdet(item,e.target.value)}
-                        style={{width:46,textAlign:'center',border:'1px solid #e2e8f0',borderRadius:6,padding:'4px 0',fontSize:13,fontWeight:700}} />
-                      <button onClick={()=>updateMalKabulItemAdet(item,item.adet+1)}
-                        style={{width:26,height:26,borderRadius:6,border:'1px solid #cbd5e1',background:'#f8fafc',cursor:'pointer',fontWeight:700,fontSize:15}}>+</button>
+                      <p style={{fontSize:10,color:'#94a3b8'}}>Sayılan: {item.adet}{selected?' · VAS transfer edilecek':''}{item.hasarliAdet>0?` · ⚠️${item.hasarliAdet} hasarlı`:''}</p>
                     </div>
                     <button onClick={()=>{
                       const next={...vasItems,[key]:selected?0:item.adet};
@@ -1045,18 +979,14 @@ export default function MalKabul() {
               {/* Toplu uygula */}
               <div style={{background:'#eff6ff',borderRadius:8,padding:'8px 10px',marginBottom:10}}>
                 <p style={{fontSize:11,fontWeight:600,color:'#1d4ed8',marginBottom:5}}>Tümüne aynı lokasyon:</p>
-                <input placeholder="A109S013B" value={mkTopluLokasyon}
-                  style={{width:'100%',padding:'7px 10px',border:'1px solid #bfdbfe',borderRadius:7,fontSize:13,fontFamily:'monospace',outline:'none',boxSizing:'border-box'}}
+                <input placeholder="A109S013B" style={{width:'100%',padding:'7px 10px',border:'1px solid #bfdbfe',borderRadius:7,fontSize:13,fontFamily:'monospace',outline:'none',boxSizing:'border-box'}}
                   onChange={e=>{
                     const lok=e.target.value.trim().toUpperCase();
-                    setMkTopluLokasyon(lok);
+                    if(!lok) return;
                     const newLoks={...mkLokasyonlar};
                     itemList.forEach(item=>{
-                      if((vasItems[item.ean||item.malzemeKodu]||0)<item.adet){
-                        const key=item.ean||item.malzemeKodu;
-                        if(lok) newLoks[key]=lok;
-                        else delete newLoks[key];
-                      }
+                      if((vasItems[item.ean||item.malzemeKodu]||0)<item.adet)
+                        newLoks[item.ean||item.malzemeKodu]=lok;
                     });
                     setMkLokasyonlar(newLoks);
                     persistMalKabulOptions(vasItems,newLoks);
