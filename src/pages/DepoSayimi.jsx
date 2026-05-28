@@ -182,7 +182,7 @@ function LokPicker({ onSelect, currentLok }) {
 }
 
 /* ── SAYIM EKRANI ── */
-function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBack }) {
+function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBack, requireKnownProduct = false }) {
   const { user, profile } = useAuth();
   const [entries, setEntries] = useState({});
   const [hasarlilar, setHasarlilar] = useState({});
@@ -208,6 +208,28 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
     streamRef.current=null; setCamOn(false);
   },[]);
 
+  const getProductByCode = useCallback((code)=>{
+    const key = String(code || '').trim();
+    if(!key) return null;
+    return products[key] || null;
+  },[products]);
+
+  const addProductCode = useCallback((code)=>{
+    const rawCode = String(code || '').trim();
+    if(!rawCode) return false;
+
+    const product = getProductByCode(rawCode);
+    if(requireKnownProduct && !product){
+      toast$(`Ürün havuzunda bulunamadı: ${rawCode}`,'error');
+      return false;
+    }
+
+    const key = product?.ean || product?.malzemeKodu || rawCode;
+    setEntries(prev=>({...prev,[key]:(prev[key]||0)+1}));
+    toast$(product?.urunAdi || rawCode,'success');
+    return true;
+  },[getProductByCode, requireKnownProduct]);
+
   const scan = useCallback(()=>{
     if(!videoRef.current||!detRef.current) return;
     detRef.current.detect(videoRef.current).then(res=>{
@@ -215,14 +237,12 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
         const code=res[0].rawValue; const now=Date.now();
         if(code!==lastBcRef.current.code||now-lastBcRef.current.ts>2000){
           lastBcRef.current={code,ts:now};
-          const ean=String(code).trim();
-          setEntries(prev=>({...prev,[ean]:(prev[ean]||0)+1}));
-          toast$(products[ean]?.urunAdi||ean,'success');
+          addProductCode(code);
         }
       }
       rafRef.current=requestAnimationFrame(scan);
     }).catch(()=>{rafRef.current=requestAnimationFrame(scan);});
-  },[products]);
+  },[addProductCode]);
 
   const startCam = useCallback(async()=>{
     try{
@@ -239,29 +259,34 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
 
   const handleText = (e) => {
     if(e.key!=='Enter') return;
-    const ean=barInput.trim(); if(!ean) return;
-    setEntries(prev=>({...prev,[ean]:(prev[ean]||0)+1}));
-    toast$(products[ean]?.urunAdi||ean,'success');
-    setBarInput('');
+    const code=barInput.trim(); if(!code) return;
+    const added = addProductCode(code);
+    if(added) setBarInput('');
   };
 
   const handleSubmit = async () => {
     if(Object.keys(entries).length===0){toast$('Hiç ürün girilmedi','error');return;}
     setSaving(true);
     try {
-      const items = Object.entries(entries).map(([ean,adet])=>({
-        ean, adet,
-        urunAdi:products[ean]?.urunAdi||'',
-        malzemeKodu:products[ean]?.malzemeKodu||'',
-        hasarliAdet:hasarlilar[ean]||0,
-      }));
+      const items = Object.entries(entries).map(([key,adet])=>{
+        const product = products[key] || {};
+        return {
+          ean: product.ean || key,
+          adet,
+          urunAdi: product.urunAdi || '',
+          malzemeKodu: product.malzemeKodu || '',
+          hasarliAdet: hasarlilar[key] || 0,
+        };
+      });
       const ref = await addDoc(collection(db,'countEntries'),{
         sessionId, lokasyon, tip:sessionTip,
         kullanici:profile?.name||user?.email||'',
         kullaniciId:user?.uid||'',
         items, tarih:Timestamp.now(), durum:'bekliyor',
-        hasarliOzet:Object.entries(hasarlilar).map(([ean,adet])=>({
-          ean,adet,urunAdi:products[ean]?.urunAdi||''
+        hasarliOzet:Object.entries(hasarlilar).map(([key,adet])=>({
+          ean: products[key]?.ean || key,
+          adet,
+          urunAdi: products[key]?.urunAdi || ''
         })).filter(h=>h.adet>0),
       });
       onSubmit(ref.id, items);
@@ -401,7 +426,12 @@ export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
   useEffect(()=>{
     getDocs(collection(db,'products')).then(snap=>{
       const m={};
-      snap.docs.forEach(d=>{const p=d.data();if(p.ean)m[p.ean]=p;});
+      snap.docs.forEach(d=>{
+        const p=d.data();
+        const normalized = { id:d.id, ...p };
+        if(p.ean) m[String(p.ean).trim()] = normalized;
+        if(p.malzemeKodu) m[String(p.malzemeKodu).trim()] = normalized;
+      });
       setProducts(m);
     });
   },[]);
@@ -594,37 +624,8 @@ export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
 
   /* ── VAS TAMAMLA → LOKASYONA ── */
   const loadVasItems = useCallback(async()=>{
-    const vasSnap=await getDocs(query(collection(db,'vasItems'),where('durum','==','etiketleme_bekliyor')));
-
-    // VAS'a ilk alındığında ürün sistemde yoksa sadece barkod kaydedilmiş olabilir.
-    // Bu yüzden liste açılırken products koleksiyonundan tekrar eşleştiriyoruz.
-    const productSnap=await getDocs(collection(db,'products'));
-    const productMap={};
-
-    productSnap.docs.forEach(d=>{
-      const p=d.data();
-      const ean=String(p.ean||'').trim();
-      const malzemeKodu=String(p.malzemeKodu||'').trim();
-
-      if(ean) productMap[ean]=p;
-      if(malzemeKodu) productMap[malzemeKodu]=p;
-    });
-
-    const enrichedVasList=vasSnap.docs.map(d=>{
-      const item={id:d.id,...d.data()};
-      const ean=String(item.ean||'').trim();
-      const malzemeKodu=String(item.malzemeKodu||'').trim();
-      const product=productMap[ean]||productMap[malzemeKodu];
-
-      return {
-        ...item,
-        ean:item.ean||product?.ean||'',
-        malzemeKodu:item.malzemeKodu||product?.malzemeKodu||'',
-        urunAdi:item.urunAdi||product?.urunAdi||item.ean||item.malzemeKodu||'Ürün'
-      };
-    });
-
-    setVasList(enrichedVasList);
+    const snap=await getDocs(query(collection(db,'vasItems'),where('durum','==','etiketleme_bekliyor')));
+    setVasList(snap.docs.map(d=>({id:d.id,...d.data()})));
   },[]);
 
   const vasLokasyonaGonder = async(vasItem,lokasyon) => {
@@ -681,6 +682,7 @@ export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
   if(view==='mk_sayim'&&activeSession){
     return <SayimEkrani lokasyon="MAL_KABUL" sessionId={activeSession.id}
       sessionTip="mal_kabul" products={products}
+      requireKnownProduct={mkTur==='referansli'}
       onSubmit={(id,items)=>{setMkEntries(prev=>[...prev,{id,items}]);setView('mk_ozet');}}
       onBack={()=>setView('mk_ozet')}/>;
   }
@@ -1042,10 +1044,8 @@ function VasCard({ item, onSend }) {
   const [showPicker, setShowPicker] = useState(false);
   return (
     <div style={{background:'#fff',borderRadius:14,padding:'14px 16px',border:'1px solid #e2e8f0',marginBottom:12}}>
-      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean||item.malzemeKodu}</p>
-      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>
-        {(item.malzemeKodu||item.ean)||'-'} · {item.adet} adet
-      </p>
+      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean}</p>
+      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>{item.malzemeKodu} · {item.adet} adet</p>
       {!showPicker?(
         <div style={{display:'flex',gap:8}}>
           <input value={lok} onChange={e=>setLok(e.target.value.toUpperCase())}
@@ -1068,3 +1068,5 @@ function VasCard({ item, onSend }) {
     </div>
   );
 }
+
+                  
