@@ -182,7 +182,7 @@ function LokPicker({ onSelect, currentLok }) {
 }
 
 /* ── SAYIM EKRANI ── */
-function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBack, requireKnownProduct = false, referenceItems = [] }) {
+function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBack }) {
   const { user, profile } = useAuth();
   const [entries, setEntries] = useState({});
   const [hasarlilar, setHasarlilar] = useState({});
@@ -208,60 +208,6 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
     streamRef.current=null; setCamOn(false);
   },[]);
 
-  const getProductByCode = useCallback((code)=>{
-    const key = String(code || '').trim();
-    if(!key) return null;
-    return products[key] || null;
-  },[products]);
-
-  const getRefKeys = useCallback((ref)=>{
-    const keys = new Set();
-    const ean = String(ref?.ean || '').trim();
-    const malzemeKodu = String(ref?.malzemeKodu || '').trim();
-    if(ean) keys.add(ean);
-    if(malzemeKodu) keys.add(malzemeKodu);
-    const p = products[ean] || products[malzemeKodu];
-    if(p?.ean) keys.add(String(p.ean).trim());
-    if(p?.malzemeKodu) keys.add(String(p.malzemeKodu).trim());
-    return keys;
-  },[products]);
-
-  const referenceKeySet = new Set();
-  (referenceItems || []).forEach(ref=>{
-    getRefKeys(ref).forEach(k=>referenceKeySet.add(k));
-  });
-
-  const getEntryCountForRef = (ref) => {
-    let total = 0;
-    getRefKeys(ref).forEach(k=>{ total += entries[k] || 0; });
-    return total;
-  };
-
-  const addProductCode = useCallback((code)=>{
-    const rawCode = String(code || '').trim();
-    if(!rawCode) return false;
-
-    const product = getProductByCode(rawCode);
-    if(requireKnownProduct && !product){
-      toast$(`Ürün havuzunda bulunamadı: ${rawCode}`,'error');
-      return false;
-    }
-
-    if(requireKnownProduct && referenceItems.length > 0){
-      const possibleKeys = [rawCode, product?.ean, product?.malzemeKodu].filter(Boolean).map(k=>String(k).trim());
-      const inReference = possibleKeys.some(k=>referenceKeySet.has(k));
-      if(!inReference){
-        toast$(`Bu ürün referans dosyasında yok: ${rawCode}`,'error');
-        return false;
-      }
-    }
-
-    const key = product?.ean || product?.malzemeKodu || rawCode;
-    setEntries(prev=>({...prev,[key]:(prev[key]||0)+1}));
-    toast$(product?.urunAdi || rawCode,'success');
-    return true;
-  },[getProductByCode, requireKnownProduct, referenceItems, referenceKeySet]);
-
   const scan = useCallback(()=>{
     if(!videoRef.current||!detRef.current) return;
     detRef.current.detect(videoRef.current).then(res=>{
@@ -269,12 +215,14 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
         const code=res[0].rawValue; const now=Date.now();
         if(code!==lastBcRef.current.code||now-lastBcRef.current.ts>2000){
           lastBcRef.current={code,ts:now};
-          addProductCode(code);
+          const ean=String(code).trim();
+          setEntries(prev=>({...prev,[ean]:(prev[ean]||0)+1}));
+          toast$(products[ean]?.urunAdi||ean,'success');
         }
       }
       rafRef.current=requestAnimationFrame(scan);
     }).catch(()=>{rafRef.current=requestAnimationFrame(scan);});
-  },[addProductCode]);
+  },[products]);
 
   const startCam = useCallback(async()=>{
     try{
@@ -291,34 +239,29 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
 
   const handleText = (e) => {
     if(e.key!=='Enter') return;
-    const code=barInput.trim(); if(!code) return;
-    const added = addProductCode(code);
-    if(added) setBarInput('');
+    const ean=barInput.trim(); if(!ean) return;
+    setEntries(prev=>({...prev,[ean]:(prev[ean]||0)+1}));
+    toast$(products[ean]?.urunAdi||ean,'success');
+    setBarInput('');
   };
 
   const handleSubmit = async () => {
     if(Object.keys(entries).length===0){toast$('Hiç ürün girilmedi','error');return;}
     setSaving(true);
     try {
-      const items = Object.entries(entries).map(([key,adet])=>{
-        const product = products[key] || {};
-        return {
-          ean: product.ean || key,
-          adet,
-          urunAdi: product.urunAdi || '',
-          malzemeKodu: product.malzemeKodu || '',
-          hasarliAdet: hasarlilar[key] || 0,
-        };
-      });
+      const items = Object.entries(entries).map(([ean,adet])=>({
+        ean, adet,
+        urunAdi:products[ean]?.urunAdi||'',
+        malzemeKodu:products[ean]?.malzemeKodu||'',
+        hasarliAdet:hasarlilar[ean]||0,
+      }));
       const ref = await addDoc(collection(db,'countEntries'),{
         sessionId, lokasyon, tip:sessionTip,
         kullanici:profile?.name||user?.email||'',
         kullaniciId:user?.uid||'',
         items, tarih:Timestamp.now(), durum:'bekliyor',
-        hasarliOzet:Object.entries(hasarlilar).map(([key,adet])=>({
-          ean: products[key]?.ean || key,
-          adet,
-          urunAdi: products[key]?.urunAdi || ''
+        hasarliOzet:Object.entries(hasarlilar).map(([ean,adet])=>({
+          ean,adet,urunAdi:products[ean]?.urunAdi||''
         })).filter(h=>h.adet>0),
       });
       onSubmit(ref.id, items);
@@ -380,41 +323,6 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
       )}
 
       <div style={{padding:'0 16px 80px'}}>
-        {referenceItems.length>0&&(
-          <div style={{background:'#fff',border:'1px solid #e2e8f0',borderRadius:12,marginBottom:12,overflow:'hidden'}}>
-            <div style={{display:'flex',alignItems:'center',gap:8,padding:'10px 12px',background:'#f8fafc',borderBottom:'1px solid #e2e8f0'}}>
-              <p style={{fontSize:13,fontWeight:800,color:'#1e293b',flex:1}}>📋 Referans Listesi</p>
-              <p style={{fontSize:11,color:'#64748b',fontWeight:600}}>
-                {referenceItems.filter(r=>getEntryCountForRef(r)===(r.beklenenAdet||0)).length} / {referenceItems.length} tamam
-              </p>
-            </div>
-            <div style={{maxHeight:360,overflowY:'auto'}}>
-              {referenceItems.map((ref,i)=>{
-                const sayilan = getEntryCountForRef(ref);
-                const beklenen = ref.beklenenAdet || 0;
-                const p = products[String(ref.ean || '').trim()] || products[String(ref.malzemeKodu || '').trim()] || {};
-                const urunAdi = ref.urunAdi || p.urunAdi || ref.malzemeKodu || ref.ean || '-';
-                const kod = ref.malzemeKodu || p.malzemeKodu || ref.ean || p.ean || '-';
-                const durum = sayilan === beklenen ? 'tamam' : sayilan > beklenen ? 'fazla' : sayilan > 0 ? 'eksik' : 'bekliyor';
-                const renk = durum === 'tamam' ? '#10b981' : durum === 'fazla' ? '#ef4444' : durum === 'eksik' ? '#f59e0b' : '#94a3b8';
-                const bg = durum === 'tamam' ? '#f0fdf4' : durum === 'fazla' ? '#fef2f2' : durum === 'eksik' ? '#fffbeb' : '#fff';
-                return (
-                  <div key={`${kod}-${i}`} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 12px',borderBottom:'1px solid #f1f5f9',background:bg}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <p style={{fontSize:12,fontWeight:700,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{urunAdi}</p>
-                      <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{kod}{ref.ean?` · ${ref.ean}`:''}</p>
-                    </div>
-                    <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
-                      <span style={{fontSize:12,fontWeight:800,color:renk}}>{sayilan}</span>
-                      <span style={{fontSize:11,color:'#94a3b8'}}> / {beklenen}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
         {showHasar&&itemList.length>0&&(
           <div style={{background:'#fef3c7',borderRadius:10,padding:'10px 12px',marginBottom:10,border:'1px solid #fde68a'}}>
             <p style={{fontSize:12,fontWeight:700,color:'#92400e',marginBottom:8}}>⚠️ Hasarlı Ürün Girişi</p>
@@ -434,7 +342,7 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
           </div>
         )}
 
-        {itemList.length===0&&referenceItems.length===0&&<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'24px 0'}}>Henüz ürün taranmadı</p>}
+        {itemList.length===0&&<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'24px 0'}}>Henüz ürün taranmadı</p>}
         {itemList.map(([ean,adet])=>{
           const p=products[ean]||{};
           const hasar=hasarlilar[ean]||0;
@@ -493,12 +401,7 @@ export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
   useEffect(()=>{
     getDocs(collection(db,'products')).then(snap=>{
       const m={};
-      snap.docs.forEach(d=>{
-        const p=d.data();
-        const normalized = { id:d.id, ...p };
-        if(p.ean) m[String(p.ean).trim()] = normalized;
-        if(p.malzemeKodu) m[String(p.malzemeKodu).trim()] = normalized;
-      });
+      snap.docs.forEach(d=>{const p=d.data();if(p.ean)m[p.ean]=p;});
       setProducts(m);
     });
   },[]);
@@ -691,8 +594,37 @@ export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
 
   /* ── VAS TAMAMLA → LOKASYONA ── */
   const loadVasItems = useCallback(async()=>{
-    const snap=await getDocs(query(collection(db,'vasItems'),where('durum','==','etiketleme_bekliyor')));
-    setVasList(snap.docs.map(d=>({id:d.id,...d.data()})));
+    const vasSnap=await getDocs(query(collection(db,'vasItems'),where('durum','==','etiketleme_bekliyor')));
+
+    // VAS'a ilk alındığında ürün sistemde yoksa sadece barkod kaydedilmiş olabilir.
+    // Bu yüzden liste açılırken products koleksiyonundan tekrar eşleştiriyoruz.
+    const productSnap=await getDocs(collection(db,'products'));
+    const productMap={};
+
+    productSnap.docs.forEach(d=>{
+      const p=d.data();
+      const ean=String(p.ean||'').trim();
+      const malzemeKodu=String(p.malzemeKodu||'').trim();
+
+      if(ean) productMap[ean]=p;
+      if(malzemeKodu) productMap[malzemeKodu]=p;
+    });
+
+    const enrichedVasList=vasSnap.docs.map(d=>{
+      const item={id:d.id,...d.data()};
+      const ean=String(item.ean||'').trim();
+      const malzemeKodu=String(item.malzemeKodu||'').trim();
+      const product=productMap[ean]||productMap[malzemeKodu];
+
+      return {
+        ...item,
+        ean:item.ean||product?.ean||'',
+        malzemeKodu:item.malzemeKodu||product?.malzemeKodu||'',
+        urunAdi:item.urunAdi||product?.urunAdi||item.ean||item.malzemeKodu||'Ürün'
+      };
+    });
+
+    setVasList(enrichedVasList);
   },[]);
 
   const vasLokasyonaGonder = async(vasItem,lokasyon) => {
@@ -749,8 +681,6 @@ export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
   if(view==='mk_sayim'&&activeSession){
     return <SayimEkrani lokasyon="MAL_KABUL" sessionId={activeSession.id}
       sessionTip="mal_kabul" products={products}
-      requireKnownProduct={mkTur==='referansli'}
-      referenceItems={mkTur==='referansli' ? mkRef : []}
       onSubmit={(id,items)=>{setMkEntries(prev=>[...prev,{id,items}]);setView('mk_ozet');}}
       onBack={()=>setView('mk_ozet')}/>;
   }
@@ -1112,8 +1042,10 @@ function VasCard({ item, onSend }) {
   const [showPicker, setShowPicker] = useState(false);
   return (
     <div style={{background:'#fff',borderRadius:14,padding:'14px 16px',border:'1px solid #e2e8f0',marginBottom:12}}>
-      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean}</p>
-      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>{item.malzemeKodu} · {item.adet} adet</p>
+      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean||item.malzemeKodu}</p>
+      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>
+        {(item.malzemeKodu||item.ean)||'-'} · {item.adet} adet
+      </p>
       {!showPicker?(
         <div style={{display:'flex',gap:8}}>
           <input value={lok} onChange={e=>setLok(e.target.value.toUpperCase())}
