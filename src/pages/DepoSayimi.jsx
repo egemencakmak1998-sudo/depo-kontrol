@@ -211,11 +211,18 @@ export default function DepoSayimi() {
 
   const loadData = async () => {
     try {
-      const [lSnap, sSnap] = await Promise.all([
-        getDocs(query(collection(db,'locations'),orderBy('kod'))),
+      const [pSnap, sSnap] = await Promise.all([
+        getDocs(collection(db,'products')),
         getDocs(query(collection(db,'countSessions'),orderBy('baslangic','desc'))),
       ]);
-      setLocations(lSnap.docs.map(d=>({id:d.id,...d.data()})));
+      // Lokasyonları products koleksiyonundaki locations array'inden topla
+      const lokSet = new Set();
+      pSnap.docs.forEach(d => {
+        const locs = d.data().locations || [];
+        locs.forEach(l => { if (l && l.trim()) lokSet.add(l.trim()); });
+      });
+      const sortedLoks = [...lokSet].sort().map(kod => ({ id:kod, kod }));
+      setLocations(sortedLoks);
       setSessions(sSnap.docs.map(d=>({id:d.id,...d.data()})).slice(0,30));
     } catch {}
   };
