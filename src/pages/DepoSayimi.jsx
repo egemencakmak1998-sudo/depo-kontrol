@@ -11,6 +11,20 @@ function Toast({ msg, type, onDone }) {
   return <div style={{position:'fixed',top:16,left:'50%',transform:'translateX(-50%)',background:bg[type]||'#334155',color:'#fff',padding:'10px 20px',borderRadius:16,fontSize:13,fontWeight:600,zIndex:9999,maxWidth:'90vw',textAlign:'center',boxShadow:'0 4px 16px rgba(0,0,0,.2)'}}>{msg}</div>;
 }
 
+const RAF_LIMITS = {
+  '109': { start: 13, end: 117 },
+  '110': { start: 14, end: 117 }
+};
+const getRafRange = (koridor) => RAF_LIMITS[koridor] || RAF_LIMITS['109'];
+const getRafList = (koridor) => {
+  const { start, end } = getRafRange(koridor);
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+};
+const isValidRaf = (koridor, rafNo) => {
+  const { start, end } = getRafRange(koridor);
+  return rafNo >= start && rafNo <= end;
+};
+
 /* ── LOKASYON SEÇİCİ ── */
 function LokPicker({ onSelect, currentLok }) {
   const [search, setSearch] = useState('');
@@ -39,7 +53,9 @@ function LokPicker({ onSelect, currentLok }) {
         const code = res[0].rawValue.trim();
         const m = code.match(/^A?(109|110)S?(\d{3})([A-F])$/i);
         if(m){
-          setKor(m[1]); setRaf(parseInt(m[2])); setKat(m[3].toUpperCase());
+          const rafNo = parseInt(m[2]);
+          if(!isValidRaf(m[1], rafNo)) return;
+          setKor(m[1]); setRaf(rafNo); setKat(m[3].toUpperCase());
           stopCam();
         }
       }
@@ -65,14 +81,17 @@ function LokPicker({ onSelect, currentLok }) {
     const katIdx = KATS.indexOf(kat);
     if(dir==='up' && katIdx<KATS.length-1){ setKat(KATS[katIdx+1]); }
     else if(dir==='down' && katIdx>0){ setKat(KATS[katIdx-1]); }
-    else if(dir==='right' && raf<117){ setRaf(raf+1); }
-    else if(dir==='left' && raf>1){ setRaf(raf-1); }
+    else if(dir==='right' && raf<getRafRange(kor).end){ setRaf(raf+1); }
+    else if(dir==='left' && raf>getRafRange(kor).start){ setRaf(raf-1); }
   };
 
   const handleSearch = (val) => {
     setSearch(val);
     const m = val.trim().match(/^A?(109|110)S?(\d{2,3})([A-F])$/i);
-    if(m){ setKor(m[1]); setRaf(parseInt(m[2])); setKat(m[3].toUpperCase()); }
+    if(m){
+      const rafNo = parseInt(m[2]);
+      if(isValidRaf(m[1], rafNo)){ setKor(m[1]); setRaf(rafNo); setKat(m[3].toUpperCase()); }
+    }
   };
 
   return (
@@ -123,10 +142,10 @@ function LokPicker({ onSelect, currentLok }) {
 
       {/* Raf */}
       <p style={{fontSize:11,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>
-        Raf {raf?`— ${raf}`:''}
+        Raf {raf?`— ${raf}`:`(${getRafRange(kor).start}-${getRafRange(kor).end})`}
       </p>
       <div style={{display:'grid',gridTemplateColumns:'repeat(8,1fr)',gap:4,maxHeight:160,overflowY:'auto',marginBottom:14}}>
-        {Array.from({length:114},(_,i)=>i+1).map(n=>(
+        {getRafList(kor).map(n=>(
           <button key={n} onClick={()=>{setRaf(n);setKat(null);}}
             style={{padding:'6px 0',border:'none',borderRadius:6,fontSize:11,fontWeight:600,cursor:'pointer',
               background:raf===n?'#1e40af':'#f1f5f9',color:raf===n?'#fff':'#475569'}}>
