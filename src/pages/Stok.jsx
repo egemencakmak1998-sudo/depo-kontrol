@@ -164,20 +164,35 @@ export default function Stok() {
     setKritikLoading(true);
     try {
       const stockSnap = await getDocs(collection(db,'stock'));
-      const kritik = stockSnap.docs
-        .map(d => ({ean:d.id,...d.data()}))
-        .filter(s => (s.miktar||0) <= 0);
-
       const prodSnap = await getDocs(collection(db,'products'));
       const prodMap = {};
       prodSnap.docs.forEach(d => { const p=d.data(); if(p.ean) prodMap[p.ean]=p; });
 
-      setKritikList(kritik.map(s => ({
-        ...s,
-        urunAdi: prodMap[s.ean]?.urunAdi || '',
-        malzemeKodu: prodMap[s.ean]?.malzemeKodu || '',
-        locations: prodMap[s.ean]?.locations || [],
-      })).sort((a,b) => (a.miktar||0)-(b.miktar||0)));
+      const kritik = [];
+      stockSnap.docs.forEach(d => {
+        const s = {ean:d.id,...d.data()};
+        const prod = prodMap[s.ean] || {};
+        const base = {
+          ...s,
+          urunAdi: prod.urunAdi || s.urunAdi || '',
+          malzemeKodu: prod.malzemeKodu || s.malzemeKodu || '',
+          locations: prod.locations || [],
+        };
+        // Toplam stok sıfır veya eksi
+        if ((s.miktar||0) <= 0) {
+          kritik.push({ ...base, kritikTip: 'toplam' });
+        }
+        // Lokasyon bazlı eksiler (toplam pozitif olsa bile)
+        if (s.byLocation) {
+          Object.entries(s.byLocation).forEach(([lok, m]) => {
+            if (m < 0) {
+              kritik.push({ ...base, miktar: m, kritikLokasyon: lok, kritikTip: 'lokasyon' });
+            }
+          });
+        }
+      });
+
+      setKritikList(kritik.sort((a,b) => (a.miktar||0)-(b.miktar||0)));
     } catch {}
     setKritikLoading(false);
   }, []);
@@ -374,12 +389,21 @@ export default function Stok() {
             added++;
           }
 
-          await stockBatch.commit();
-          await movBatch.commit();
-          let msg = `${added} ürün stoğa eklendi ✓`;
-          if (notFound.length>0) msg += ` (${notFound.length} ürün eşlenemedi)`;
-          toast$(msg, notFound.length>0?'warning':'success');
-          loadStats();
+          // Lokasyon sormak için preview göster
+          const previewItems = Object.entries(currentStock)
+            .filter(([ean]) => {
+              const prevMiktar = (stockMap[ean]?.miktar)||0;
+              return currentStock[ean] > prevMiktar;
+            })
+            .map(([ean, nextMiktar]) => {
+              const prevMiktar = (stockMap[ean]?.miktar)||0;
+              const delta = nextMiktar - prevMiktar;
+              const prod = Object.values(eanByCode).find(p=>p.ean===ean)||{};
+              return { ean, malzemeKodu: prod.malzemeKodu||'', urunAdi: prod.urunAdi||'', miktar: delta };
+            });
+
+          setSevkiyatPreview({ items: previewItems, lokasyonlar: {} });
+          toast$(`${previewItems.length} ürün bulundu — lokasyon girin`, 'info');
         } catch(e) { toast$('Hata: '+e.message,'error'); }
         setImpLoading(false);
       };
@@ -388,6 +412,7 @@ export default function Stok() {
   };
 
   /* ── YÖNETİM: MANUEL GİRİŞ ── */
+  const [sevkiyatPreview, setSevkiyatPreview] = useState(null); // {items:[{ean,malzemeKodu,urunAdi,miktar}], lokasyonlar:{}}
   const [manualQuery, setManualQuery] = useState('');
   const [manualProd, setManualProd] = useState(null);
   const [manualMiktar, setManualMiktar] = useState('');
@@ -399,6 +424,51 @@ export default function Stok() {
   const [lokRaf, setLokRaf] = useState(null);
   const [lokKat, setLokKat] = useState(null);
   const [showLokPicker, setShowLokPicker] = useState(false);
+
+  const saveSevkiyatWithLok = async () => {
+    if (!sevkiyatPreview) return;
+    const { items, lokasyonlar } = sevkiyatPreview;
+    const missingLok = items.find(i => !lokasyonlar[i.ean]);
+    if (missingLok) { toast$(`${missingLok.urunAdi||missingLok.ean} için lokasyon giriniz`, 'error'); return; }
+    setImpLoading(true);
+    try {
+      const now = Timestamp.now();
+      const stockSnap = await getDocs(collection(db,'stock'));
+      const stockMap = {};
+      stockSnap.docs.forEach(d => { stockMap[d.id] = d.data(); });
+
+      const batch = writeBatch(db);
+      const movBatch = writeBatch(db);
+
+      items.forEach(item => {
+        const prev = stockMap[item.ean]?.miktar || 0;
+        const next = prev + item.miktar;
+        const lok = lokasyonlar[item.ean];
+        const prevByLok = stockMap[item.ean]?.byLocation || {};
+        const newByLok = { ...prevByLok, [lok]: (prevByLok[lok]||0) + item.miktar };
+
+        batch.set(doc(db,'stock',item.ean), {
+          ean:item.ean, miktar:next, urunAdi:item.urunAdi||'',
+          malzemeKodu:item.malzemeKodu||'', byLocation:newByLok, sonGuncelleme:now
+        }, {merge:true});
+
+        movBatch.set(doc(collection(db,'stockMovements')), {
+          tarih:now, tip:'sevkiyat_excel', ean:item.ean,
+          malzemeKodu:item.malzemeKodu||'', urunAdi:item.urunAdi||'',
+          miktar:item.miktar, oncekiMiktar:prev, sonrakiMiktar:next,
+          lokasyon:lok, kaynak:'sevkiyat_excel',
+          yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
+        });
+      });
+
+      await batch.commit();
+      await movBatch.commit();
+      setSevkiyatPreview(null);
+      toast$(`${items.length} ürün lokasyonlarıyla stoğa eklendi ✓`, 'success');
+      loadStats();
+    } catch(e) { toast$('Hata: '+e.message, 'error'); }
+    setImpLoading(false);
+  };
 
   const lookupManual = async (q) => {
     if (q.length < 3) { setManualProd(null); return; }
@@ -422,6 +492,12 @@ export default function Stok() {
     const miktar = parseInt(manualMiktar)||0;
     if (miktar===0) { toast$('Geçerli bir miktar girin','error'); return; }
     if (!manualLok.trim()) { toast$('Lokasyon seçiniz','error'); return; }
+    const lok = manualLok.trim().toUpperCase();
+    const prevByLok = manualProd.byLocation || {};
+    const prevLokMiktar = prevByLok[lok] || 0;
+    if (manualTip==='cikis' && prevLokMiktar < miktar) {
+      if (!window.confirm(`⚠️ ${lok} lokasyonunda yalnızca ${prevLokMiktar} adet var. Yine de ${miktar} adet çıkış yapılsın mı? (Lokasyon stoğu eksiye düşer)`)) return;
+    }
     setManualLoading(true);
     try {
       const now = Timestamp.now();
@@ -657,8 +733,17 @@ export default function Stok() {
               <p style={{ color:'#10b981', fontSize:13, textAlign:'center', padding:'20px 0' }}>✅ Kritik stok yok</p>
             ) : (
               kritikList.map((p,i) => (
-                <ProductRow key={i} p={p} isAdmin={isAdmin}
-                  onAdjust={isAdmin ? (p) => { setAdjustProd(p); setAdjustMiktar(String(p.miktar??'')); } : null} />
+                <div key={i}>
+                  {p.kritikTip==='lokasyon' && (
+                    <div style={{ fontSize:11, color:'#f59e0b', fontWeight:600,
+                      padding:'4px 8px', background:'#fffbeb', borderRadius:6,
+                      marginBottom:2, display:'inline-block' }}>
+                      ⚠️ Lokasyon eksisi: 📍{p.kritikLokasyon}
+                    </div>
+                  )}
+                  <ProductRow p={p} isAdmin={isAdmin}
+                    onAdjust={isAdmin ? (p) => { setAdjustProd(p); setAdjustMiktar(String(p.miktar??'')); } : null} />
+                </div>
               ))
             )}
           </div>
@@ -694,8 +779,12 @@ export default function Stok() {
                     </p>
                     <p style={{ fontSize:10, color:'#94a3b8' }}>
                       {h.yapan} · {h.tarih?.toDate?.()?.toLocaleDateString('tr-TR')}
+                      {h.lokasyon && <span style={{ marginLeft:6, color:'#3b82f6', fontWeight:600 }}>📍{h.lokasyon}</span>}
                       {h.kaynak && <span style={{ marginLeft:6 }}>· {h.kaynak.replace('irsaliye:','İrsaliye: ')}</span>}
                     </p>
+                    {h.malzemeKodu && (
+                      <p style={{ fontSize:10, color:'#cbd5e1', fontFamily:'monospace' }}>{h.malzemeKodu}</p>
+                    )}
                   </div>
                   <div style={{ textAlign:'right', flexShrink:0 }}>
                     <p style={{ fontSize:13, fontWeight:700,
@@ -741,13 +830,66 @@ export default function Stok() {
               <p style={{ fontSize:12, color:'#64748b', marginBottom:10 }}>
                 Mevcut stoğun üstüne eklenir. EAN veya Malzeme Kodu ile eşleştirme yapılır.
               </p>
-              <label style={{ ...S.btn, background:'#10b981', color:'#fff',
-                display:'inline-block', cursor:'pointer', opacity:impLoading?0.6:1 }}>
-                {impLoading ? 'Yükleniyor...' : '📂 Excel Seç'}
-                <input type="file" accept=".xlsx,.xls,.csv" style={{ display:'none' }}
-                  disabled={impLoading}
-                  onChange={e => { if(e.target.files[0]) importSevkiyat(e.target.files[0]); e.target.value=''; }} />
-              </label>
+              {!sevkiyatPreview ? (
+                <label style={{ ...S.btn, background:'#10b981', color:'#fff',
+                  display:'inline-block', cursor:'pointer', opacity:impLoading?0.6:1 }}>
+                  {impLoading ? 'Yükleniyor...' : '📂 Excel Seç'}
+                  <input type="file" accept=".xlsx,.xls,.csv" style={{ display:'none' }}
+                    disabled={impLoading}
+                    onChange={e => { if(e.target.files[0]) importSevkiyat(e.target.files[0]); e.target.value=''; }} />
+                </label>
+              ) : (
+                <div>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+                    <p style={{ fontSize:12, fontWeight:700, color:'#10b981' }}>✅ {sevkiyatPreview.items.length} ürün bulundu</p>
+                    <button onClick={() => setSevkiyatPreview(null)}
+                      style={{ ...S.btn, padding:'5px 10px', fontSize:12, background:'#fee2e2', color:'#ef4444' }}>
+                      İptal
+                    </button>
+                  </div>
+                  {/* Toplu lokasyon */}
+                  <div style={{ background:'#f0fdf4', borderRadius:10, padding:'10px 12px', marginBottom:10, border:'1px solid #bbf7d0' }}>
+                    <p style={{ fontSize:11, fontWeight:700, color:'#15803d', marginBottom:6 }}>Tümüne aynı lokasyon uygula:</p>
+                    <input placeholder="Örn: A109S013B"
+                      style={{ ...S.input, fontFamily:'monospace' }}
+                      onChange={e => {
+                        const lok = e.target.value.trim().toUpperCase();
+                        if (!lok) return;
+                        setSevkiyatPreview(prev => ({
+                          ...prev,
+                          lokasyonlar: Object.fromEntries(prev.items.map(i => [i.ean, lok]))
+                        }));
+                      }} />
+                  </div>
+                  {/* Her ürün için lokasyon */}
+                  {sevkiyatPreview.items.map((item, i) => (
+                    <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 0',
+                      borderBottom:'1px solid #f1f5f9' }}>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <p style={{ fontSize:12, fontWeight:600, color:'#1e293b',
+                          overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                          {item.urunAdi||item.ean}
+                        </p>
+                        <p style={{ fontSize:10, color:'#94a3b8' }}>{item.miktar} adet eklenecek</p>
+                      </div>
+                      <input placeholder="Lokasyon"
+                        value={sevkiyatPreview.lokasyonlar[item.ean]||''}
+                        onChange={e => setSevkiyatPreview(prev => ({
+                          ...prev,
+                          lokasyonlar: { ...prev.lokasyonlar, [item.ean]: e.target.value.trim().toUpperCase() }
+                        }))}
+                        style={{ width:110, padding:'5px 8px', border:'1px solid #e2e8f0',
+                          borderRadius:7, fontSize:11, fontFamily:'monospace', outline:'none',
+                          background: sevkiyatPreview.lokasyonlar[item.ean]?'#f0fdf4':'#fff' }} />
+                    </div>
+                  ))}
+                  <button onClick={saveSevkiyatWithLok} disabled={impLoading}
+                    style={{ ...S.btn, width:'100%', marginTop:10, background:'#10b981', color:'#fff',
+                      opacity:impLoading?0.6:1 }}>
+                    {impLoading ? 'Kaydediliyor...' : '✅ Lokasyonlarla Kaydet'}
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Manuel */}
