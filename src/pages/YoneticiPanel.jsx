@@ -83,6 +83,8 @@ function Urunler() {
   const [search, setSearch]     = useState('');
   const [importing, setImp]     = useState(false);
   const [toast, setToast]       = useState(null);
+  const [editingLoc, setEditingLoc] = useState(null);
+  const [locValue, setLocValue] = useState('');
   const toast$ = (msg,type='info')=>setToast({msg,type,id:Date.now()});
 
   const load = async () => {
@@ -118,7 +120,15 @@ function Urunler() {
           // Mevcut ürünleri EAN'a göre eşleştir (güncelleme için)
           const existingSnap=await getDocs(collection(db,'products'));
           const eanToDocId={};
-          existingSnap.docs.forEach(d=>{ if(d.data().ean) eanToDocId[String(d.data().ean).trim()]=d.id; });
+          const existingByEan={};
+          existingSnap.docs.forEach(d=>{
+            const data=d.data();
+            if(data.ean){
+              const key=String(data.ean).trim();
+              eanToDocId[key]=d.id;
+              existingByEan[key]=data;
+            }
+          });
 
           const batch=writeBatch(db);
           let created=0, updated=0;
@@ -126,11 +136,19 @@ function Urunler() {
             const ean=String(row[cEan]||'').trim();
             if(!ean) return;
 
-            // Lokasyon: virgülle ayrılmış string → array
+            // Lokasyon: virgülle ayrılmış string → array. Boşsa mevcut lokasyonu koru, yoksa BELIRLENECEK ata.
             const lokStr=cLok>=0?String(row[cLok]||'').trim():'';
-            const locations=lokStr
-              ? lokStr.split(',').map(l=>l.trim()).filter(Boolean)
+            const parsedLocations=lokStr
+              ? lokStr.split(',').map(l=>l.trim().toUpperCase()).filter(Boolean)
               : [];
+            const existingLocations=Array.isArray(existingByEan[ean]?.locations)
+              ? existingByEan[ean].locations.filter(Boolean)
+              : [];
+            const locations=parsedLocations.length
+              ? parsedLocations
+              : (existingLocations.length ? existingLocations : ['BELIRLENECEK']);
+            const primaryLocation=locations[0] || 'BELIRLENECEK';
+            const lokasyonDurumu=locations.some(l=>l && l !== 'BELIRLENECEK') ? 'atandi' : 'atanmadi';
 
             const data={
               ean,
@@ -138,6 +156,9 @@ function Urunler() {
               urunAdi:cDesc>=0?String(row[cDesc]||'').trim():'',
               birim:cBirim>=0?String(row[cBirim]||'Adet').trim():'Adet',
               locations,
+              lokasyon:primaryLocation,
+              lokasyonDurumu,
+              updatedAt: Timestamp.now(),
             };
 
             if(eanToDocId[ean]){
@@ -146,7 +167,7 @@ function Urunler() {
               updated++;
             } else {
               // Yeni ürün oluştur
-              batch.set(doc(collection(db,'products')), data);
+              batch.set(doc(collection(db,'products')), { ...data, createdAt: Timestamp.now() });
               created++;
             }
           });
@@ -160,7 +181,34 @@ function Urunler() {
     }catch{setImp(false);}
   };
 
-  const filtered=products.filter(p=>p.urunAdi?.toLowerCase().includes(search.toLowerCase())||p.ean?.includes(search)||p.malzemeKodu?.toLowerCase().includes(search.toLowerCase())).slice(0,50);
+  const getLocations = (p) => Array.isArray(p.locations) && p.locations.length ? p.locations : [p.lokasyon || 'BELIRLENECEK'];
+  const getLocationText = (p) => getLocations(p).join(' · ');
+
+  const saveLocation = async () => {
+    if (!editingLoc) return;
+    const locations = locValue.split(',').map(l=>l.trim().toUpperCase()).filter(Boolean);
+    const finalLocations = locations.length ? locations : ['BELIRLENECEK'];
+    const lokasyonDurumu = finalLocations.some(l=>l && l !== 'BELIRLENECEK') ? 'atandi' : 'atanmadi';
+    try {
+      await updateDoc(doc(db,'products',editingLoc.id), {
+        locations: finalLocations,
+        lokasyon: finalLocations[0],
+        lokasyonDurumu,
+        updatedAt: Timestamp.now(),
+      });
+      toast$('Lokasyon güncellendi ✓','success');
+      setEditingLoc(null);
+      setLocValue('');
+      load();
+    } catch(e) { toast$('Hata: '+e.message,'error'); }
+  };
+
+  const filtered=products.filter(p=>
+    p.urunAdi?.toLowerCase().includes(search.toLowerCase())||
+    p.ean?.includes(search)||
+    p.malzemeKodu?.toLowerCase().includes(search.toLowerCase())||
+    getLocationText(p).toLowerCase().includes(search.toLowerCase())
+  ).slice(0,50);
 
   return (
     <div>
@@ -174,7 +222,7 @@ function Urunler() {
         </div>
       </div>
       <div style={{background:'#f8fafc',borderRadius:12,padding:'8px 12px',border:'1px solid #e2e8f0',marginBottom:12,fontSize:12,color:'#64748b'}}>
-        <p>Excel formatı: <b>EAN Kodu · Malzeme Kodu · Ürün Adı · Birim</b></p>
+        <p>Excel formatı: <b>EAN Kodu · Malzeme Kodu · Ürün Adı · Birim</b> <span style={{color:'#94a3b8'}}>· Lokasyon opsiyonel, boşsa BELIRLENECEK atanır</span></p>
       </div>
       <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Ürün adı, EAN veya kod ile ara..." style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',marginBottom:12}} onFocus={e=>e.target.style.borderColor='#3b82f6'} onBlur={e=>e.target.style.borderColor='#e2e8f0'} />
       {filtered.map(p=>(
@@ -182,10 +230,26 @@ function Urunler() {
           <div style={{flex:1,minWidth:0}}>
             <p style={{fontSize:13,fontWeight:600,color:'#0f172a',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.urunAdi||'—'}</p>
             <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{p.malzemeKodu}{p.malzemeKodu?' · ':''}{p.ean}</p>
+            <p style={{fontSize:10,color:p.lokasyonDurumu==='atanmadi'?'#f59e0b':'#64748b',fontFamily:'monospace',marginTop:3}}>📍 {getLocationText(p)}</p>
           </div>
+          <button onClick={()=>{setEditingLoc(p);setLocValue(getLocations(p).filter(l=>l!=='BELIRLENECEK').join(', '));}} style={{fontSize:11,color:'#2563eb',background:'#eff6ff',padding:'4px 8px',borderRadius:6,border:'1px solid #bfdbfe',fontWeight:700,cursor:'pointer',flexShrink:0}}>✏️ Lokasyon</button>
           <span style={{fontSize:11,color:'#64748b',background:'#f1f5f9',padding:'2px 8px',borderRadius:6,flexShrink:0}}>{p.birim||'Adet'}</span>
         </div>
       ))}
+      {editingLoc&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(15,23,42,.45)',zIndex:9998,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+          <div style={{background:'#fff',borderRadius:16,padding:18,width:'100%',maxWidth:420,boxShadow:'0 20px 45px rgba(0,0,0,.2)'}}>
+            <p style={{fontSize:15,fontWeight:800,color:'#0f172a',marginBottom:4}}>Lokasyon Düzenle</p>
+            <p style={{fontSize:12,color:'#64748b',marginBottom:12}}>{editingLoc.urunAdi||editingLoc.ean}</p>
+            <input value={locValue} onChange={e=>setLocValue(e.target.value.toUpperCase())} placeholder="Örn: A109S013B veya virgülle çoklu lokasyon" style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',fontFamily:'monospace',marginBottom:12}} />
+            <p style={{fontSize:11,color:'#94a3b8',marginBottom:12}}>Boş kaydedersen ürün lokasyonu BELIRLENECEK olarak kalır.</p>
+            <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+              <button onClick={()=>{setEditingLoc(null);setLocValue('');}} style={{background:'#f1f5f9',border:'none',color:'#475569',padding:'9px 14px',borderRadius:10,fontWeight:700,cursor:'pointer'}}>İptal</button>
+              <button onClick={saveLocation} style={{background:'#10b981',border:'none',color:'#fff',padding:'9px 14px',borderRadius:10,fontWeight:700,cursor:'pointer'}}>Kaydet</button>
+            </div>
+          </div>
+        </div>
+      )}
       {products.length===0&&<div style={{textAlign:'center',padding:'40px 0',color:'#94a3b8'}}><p style={{fontSize:32,marginBottom:8}}>📦</p><p style={{fontSize:13}}>Henüz ürün yüklenmedi</p><p style={{fontSize:12,marginTop:4}}>Excel dosyasını yükleyin</p></div>}
       {toast&&<Toast {...toast} onDone={()=>setToast(null)} />}
     </div>
