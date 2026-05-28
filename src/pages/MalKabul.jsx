@@ -577,6 +577,44 @@ export default function MalKabul() {
       toast$('Oturum silindi (veriler korundu)','success');
     }catch(e){toast$('Hata: '+e.message,'error');}
   };
+  const getSessionTitle = (session) => {
+    const name = String(session?.sessionName || '').trim();
+    if (name) return name;
+    return session?.tip === 'genel' ? 'Genel Sayım' : 'Mal Kabul';
+  };
+
+  const editSessionName = async (session) => {
+    if (!session?.id) return;
+    const currentName = String(session.sessionName || '').trim();
+    const nextName = window.prompt('Mal Kabul adını yazın:', currentName || 'Mal Kabul');
+    if (nextName === null) return;
+
+    const cleanName = nextName.trim();
+    if (!cleanName) {
+      toast$('İsim boş bırakılamaz', 'error');
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, 'countSessions', session.id), {
+        sessionName: cleanName,
+        updatedAt: Timestamp.now()
+      });
+
+      setSessions(prev => prev.map(s => (
+        s.id === session.id ? { ...s, sessionName: cleanName } : s
+      )));
+
+      setActiveSession(prev => (
+        prev?.id === session.id ? { ...prev, sessionName: cleanName } : prev
+      ));
+
+      toast$('Mal kabul adı güncellendi ✓', 'success');
+    } catch(e) {
+      toast$('Hata: ' + e.message, 'error');
+    }
+  };
+
 
   const handleSayimSubmit = async(entryId,items) => {
     toast$(`${selectedLok} kaydedildi ✓`,'success');
@@ -1134,9 +1172,16 @@ export default function MalKabul() {
               <div key={s.id} style={{...S.card,border:'1px solid #bfdbfe',background:'#eff6ff'}}>
                 <div style={{display:'flex',alignItems:'center',gap:10}}>
                   <div style={{flex:1}}>
-                    <p style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>{s.tip==='genel'?'📦 Genel Sayım':'📥 Mal Kabul'}</p>
+                    <p style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>{s.tip==='genel'?'📦 Genel Sayım':`📥 ${getSessionTitle(s)}`}</p>
                     <p style={{fontSize:11,color:'#64748b'}}>{s.baslatan} · {s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||''}</p>
                   </div>
+                  {isAdmin&&s.tip==='mal_kabul'&&(
+                    <button onClick={()=>editSessionName(s)}
+                      title="Mal kabul adını düzenle"
+                      style={{...S.btn,background:'#f1f5f9',color:'#475569',padding:'8px 10px',fontSize:13}}>
+                      ✏️
+                    </button>
+                  )}
                   <button onClick={()=>{if(s.tip==='mal_kabul') openMalKabulSession(s); else {setActiveSession(s);loadEntries(s.id);setView('genel_lok');}}}
                     style={{...S.btn,background:'#1e40af',color:'#fff',padding:'8px 14px',fontSize:12}}>
                     {s.baslantanId===user?.uid?'Devam →':'Katıl →'}
@@ -1160,9 +1205,16 @@ export default function MalKabul() {
               <div key={s.id} style={S.card}>
                 <div style={{display:'flex',alignItems:'center',gap:10}}>
                   <div style={{flex:1}}>
-                    <p style={{fontSize:13,fontWeight:600,color:'#475569'}}>{s.tip==='genel'?'📦 Genel Sayım':'📥 Mal Kabul'}</p>
+                    <p style={{fontSize:13,fontWeight:600,color:'#475569'}}>{s.tip==='genel'?'📦 Genel Sayım':`📥 ${getSessionTitle(s)}`}</p>
                     <p style={{fontSize:11,color:'#94a3b8'}}>{s.baslatan} · {s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||''}</p>
                   </div>
+                  {isAdmin&&s.tip==='mal_kabul'&&(
+                    <button onClick={()=>editSessionName(s)}
+                      title="Mal kabul adını düzenle"
+                      style={{...S.btn,background:'#f1f5f9',color:'#475569',padding:'6px 10px',fontSize:12}}>
+                      ✏️
+                    </button>
+                  )}
                   {isAdmin&&s.tip==='genel'&&(
                     <button onClick={()=>exportGenelSayim(s.id)}
                       style={{...S.btn,background:'#f1f5f9',color:'#475569',padding:'6px 10px',fontSize:11}}>
