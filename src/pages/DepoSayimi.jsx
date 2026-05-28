@@ -370,7 +370,7 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
 }
 
 /* ── ANA COMPONENT ── */
-export default function DepoSayimi() {
+export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
   const { user, profile } = useAuth();
   const isAdmin = profile?.role==='admin';
 
@@ -395,6 +395,8 @@ export default function DepoSayimi() {
   const [vasList, setVasList] = useState([]);
 
   const toast$ = (msg,type='info') => setToast({msg,type,id:Date.now()});
+  const isMalKabulModule = defaultModule === 'mal_kabul';
+  const moduleSessionTip = isMalKabulModule ? 'mal_kabul' : 'genel';
 
   useEffect(()=>{
     getDocs(collection(db,'products')).then(snap=>{
@@ -914,35 +916,34 @@ export default function DepoSayimi() {
   }
 
   /* ── LİST ── */
-  const aktifler=sessions.filter(s=>s.durum==='aktif');
-  const bitmisler=sessions.filter(s=>s.durum!=='aktif');
+  const visibleSessions = sessions.filter(s => s.tip === moduleSessionTip);
+  const aktifler=visibleSessions.filter(s=>s.durum==='aktif');
+  const bitmisler=visibleSessions.filter(s=>s.durum!=='aktif');
 
   return (
     <div>
       <div style={{background:'#0f172a',padding:'14px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-        <p style={{color:'#fff',fontWeight:700,fontSize:16}}>🔢 Sayım</p>
-        <button onClick={()=>{loadVasItems();setView('vas_liste');}}
-          style={{...S.btn,background:'#7c3aed',color:'#fff',padding:'7px 12px',fontSize:12}}>
-          🏷️ VAS Listesi
-        </button>
+        <p style={{color:'#fff',fontWeight:700,fontSize:16}}>{isMalKabulModule ? '📥 Mal Kabul' : '🔢 Sayım'}</p>
+        {isMalKabulModule && (
+          <button onClick={()=>{loadVasItems();setView('vas_liste');}}
+            style={{...S.btn,background:'#7c3aed',color:'#fff',padding:'7px 12px',fontSize:12}}>
+            🏷️ VAS Listesi
+          </button>
+        )}
       </div>
       <div style={{padding:16}}>
-        {isAdmin&&(
+        {isAdmin && !isMalKabulModule && (
           <div style={{display:'flex',gap:10,marginBottom:16}}>
             <button onClick={()=>startSession('genel')} disabled={loading}
               style={{...S.btn,flex:1,background:'#1e40af',color:'#fff'}}>
               📦 Genel Sayım Başlat
             </button>
-            <button onClick={()=>{setMkRef([]);setMkEntries([]);setVasItems({});setView('mal_kabul');}} disabled={loading}
-              style={{...S.btn,flex:1,background:'#7c3aed',color:'#fff'}}>
-              📥 Mal Kabul
-            </button>
           </div>
         )}
-        {!isAdmin&&(
-          <button onClick={()=>{setMkRef([]);setMkEntries([]);setVasItems({});setView('mal_kabul');}}
+        {isMalKabulModule && (
+          <button onClick={()=>{setMkRef([]);setMkEntries([]);setVasItems({});setView('mal_kabul');}} disabled={loading}
             style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',marginBottom:16}}>
-            📥 Mal Kabul Sayımı
+            📥 Mal Kabul Sayımı Başlat
           </button>
         )}
 
@@ -994,10 +995,10 @@ export default function DepoSayimi() {
           </>
         )}
 
-        {sessions.length===0&&!loading&&(
+        {visibleSessions.length===0&&!loading&&(
           <div style={{textAlign:'center',padding:'48px 0',color:'#94a3b8'}}>
-            <p style={{fontSize:32,marginBottom:8}}>🔢</p>
-            <p style={{fontSize:14,fontWeight:600}}>Henüz sayım yok</p>
+            <p style={{fontSize:32,marginBottom:8}}>{isMalKabulModule ? '📥' : '🔢'}</p>
+            <p style={{fontSize:14,fontWeight:600}}>{isMalKabulModule ? 'Henüz mal kabul yok' : 'Henüz sayım yok'}</p>
           </div>
         )}
       </div>
