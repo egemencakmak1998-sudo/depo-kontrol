@@ -393,8 +393,8 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
                 const sayilan = getEntryCountForRef(ref);
                 const beklenen = ref.beklenenAdet || 0;
                 const p = products[String(ref.ean || '').trim()] || products[String(ref.malzemeKodu || '').trim()] || {};
-                const urunAdi = ref.urunAdi || p.urunAdi || ref.malzemeKodu || ref.ean || '-';
-                const kod = ref.malzemeKodu || p.malzemeKodu || ref.ean || p.ean || '-';
+                const urunAdi = p.urunAdi || ref.urunAdi || 'Ürün adı bulunamadı';
+                const kod = p.malzemeKodu || ref.malzemeKodu || ref.ean || p.ean || '-';
                 const durum = sayilan === beklenen ? 'tamam' : sayilan > beklenen ? 'fazla' : sayilan > 0 ? 'eksik' : 'bekliyor';
                 const renk = durum === 'tamam' ? '#10b981' : durum === 'fazla' ? '#ef4444' : durum === 'eksik' ? '#f59e0b' : '#94a3b8';
                 const bg = durum === 'tamam' ? '#f0fdf4' : durum === 'fazla' ? '#fef2f2' : durum === 'eksik' ? '#fffbeb' : '#fff';
@@ -800,7 +800,7 @@ export default function MalKabul() {
       const product=products[String(item.ean||'').trim()]||products[String(item.malzemeKodu||'').trim()]||{};
       return {
         ...item,
-        urunAdi:item.urunAdi||product.urunAdi||item.ean,
+        urunAdi:product.urunAdi||item.urunAdi||item.ean||item.malzemeKodu||'Ürün adı bulunamadı',
         malzemeKodu:item.malzemeKodu||product.malzemeKodu||'',
         ean:item.ean||product.ean||''
       };
@@ -957,15 +957,66 @@ export default function MalKabul() {
         allItems[key].hasarliAdet+=(item.hasarliAdet||0);
       });
     });
-    const itemList=Object.values(allItems);
+    const enrichMalKabulItem = (item) => {
+      const product = products[String(item.ean || '').trim()] || products[String(item.malzemeKodu || '').trim()] || {};
+      return {
+        ...item,
+        ean: item.ean || product.ean || '',
+        malzemeKodu: item.malzemeKodu || product.malzemeKodu || '',
+        urunAdi: product.urunAdi || item.urunAdi || 'Ürün adı bulunamadı',
+      };
+    };
+
+    const itemList=Object.values(allItems).map(enrichMalKabulItem).filter(item=>item.ean || item.malzemeKodu || item.urunAdi !== 'Ürün adı bulunamadı');
     const toplam=itemList.reduce((a,i)=>a+i.adet,0);
     const toplamHasar=itemList.reduce((a,i)=>a+(i.hasarliAdet||0),0);
 
-    const refMap=Object.fromEntries(mkRef.map(r=>[r.malzemeKodu,r]));
-    const tamEslesen=mkRef.length>0&&itemList.every(item=>{
-      const ref=refMap[item.malzemeKodu];
-      return ref&&ref.beklenenAdet===item.adet;
+    const countedMap={};
+    itemList.forEach(item=>{
+      [item.ean,item.malzemeKodu].filter(Boolean).forEach(k=>{
+        countedMap[String(k).trim()]=item.adet;
+      });
     });
+
+    const refKeySet=new Set();
+    mkRef.forEach(ref=>{
+      [ref.ean,ref.malzemeKodu].filter(Boolean).forEach(k=>refKeySet.add(String(k).trim()));
+    });
+
+    const refFarkList=mkRef.map(ref=>{
+      const keys=[ref.ean,ref.malzemeKodu].filter(Boolean).map(k=>String(k).trim());
+      const sayilanKey=keys.find(k=>countedMap[k]!==undefined);
+      const sayilan=sayilanKey?countedMap[sayilanKey]:0;
+      const beklenen=ref.beklenenAdet||0;
+      const product=products[String(ref.ean||'').trim()]||products[String(ref.malzemeKodu||'').trim()]||{};
+      return {
+        tip:'referans',
+        urunAdi:product.urunAdi||ref.urunAdi||'Ürün adı bulunamadı',
+        ean:ref.ean||product.ean||'',
+        malzemeKodu:ref.malzemeKodu||product.malzemeKodu||'',
+        beklenen,
+        sayilan,
+        fark:sayilan-beklenen
+      };
+    }).filter(x=>x.fark!==0);
+
+    const refDisiList=mkRef.length>0?itemList.filter(item=>{
+      const keys=[item.ean,item.malzemeKodu].filter(Boolean).map(k=>String(k).trim());
+      return !keys.some(k=>refKeySet.has(k));
+    }).map(item=>({
+      tip:'referans_disi',
+      urunAdi:item.urunAdi||'Ürün adı bulunamadı',
+      ean:item.ean||'',
+      malzemeKodu:item.malzemeKodu||'',
+      beklenen:0,
+      sayilan:item.adet||0,
+      fark:item.adet||0
+    })):[];
+
+    const tumFarklar=[...refFarkList,...refDisiList];
+    const toplamEksik=tumFarklar.filter(x=>x.fark<0).reduce((a,x)=>a+Math.abs(x.fark),0);
+    const toplamFazla=tumFarklar.filter(x=>x.fark>0).reduce((a,x)=>a+x.fark,0);
+    const tamEslesen=mkRef.length>0&&tumFarklar.length===0;
 
     return (
       <div>
@@ -978,8 +1029,31 @@ export default function MalKabul() {
             <p style={{fontSize:12,fontWeight:700,color:'#15803d'}}>📊 Özet</p>
             <p style={{fontSize:12,color:'#166534',marginTop:4}}>{itemList.length} kalem · {toplam.toLocaleString()} adet{toplamHasar>0?` · ⚠️ ${toplamHasar} hasarlı`:''}</p>
             {tamEslesen&&<p style={{fontSize:12,color:'#10b981',marginTop:4,fontWeight:600}}>✅ Referans ile tam eşleşme</p>}
-            {mkRef.length>0&&!tamEslesen&&<p style={{fontSize:12,color:'#d97706',marginTop:4,fontWeight:600}}>⚠️ Referans ile fark var</p>}
+            {mkRef.length>0&&!tamEslesen&&<p style={{fontSize:12,color:'#d97706',marginTop:4,fontWeight:600}}>⚠️ Referans ile fark var · {tumFarklar.length} kalem · Eksik: {toplamEksik} · Fazla: {toplamFazla}</p>}
           </div>
+
+          {mkRef.length>0&&tumFarklar.length>0&&(
+            <div style={{...S.card,border:'1px solid #fde68a',background:'#fffbeb'}}>
+              <p style={{fontSize:13,fontWeight:800,color:'#92400e',marginBottom:8}}>⚠️ Referans Fark Detayı</p>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 80px 80px 80px',gap:8,padding:'6px 0',borderBottom:'1px solid #fde68a',fontSize:11,fontWeight:800,color:'#92400e'}}>
+                <span>Ürün</span>
+                <span style={{textAlign:'right'}}>Referans</span>
+                <span style={{textAlign:'right'}}>Sayılan</span>
+                <span style={{textAlign:'right'}}>Fark</span>
+              </div>
+              {tumFarklar.map((f,i)=>(
+                <div key={`${f.ean||f.malzemeKodu||i}-${i}`} style={{display:'grid',gridTemplateColumns:'1fr 80px 80px 80px',gap:8,padding:'8px 0',borderBottom:i===tumFarklar.length-1?'none':'1px solid #fde68a',alignItems:'center'}}>
+                  <div style={{minWidth:0}}>
+                    <p style={{fontSize:12,fontWeight:700,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{f.urunAdi}</p>
+                    <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{f.malzemeKodu||'-'}{f.ean?` · ${f.ean}`:''}{f.tip==='referans_disi'?' · Referans dışı':''}</p>
+                  </div>
+                  <p style={{fontSize:12,fontWeight:800,textAlign:'right',color:'#475569'}}>{f.beklenen}</p>
+                  <p style={{fontSize:12,fontWeight:800,textAlign:'right',color:'#475569'}}>{f.sayilan}</p>
+                  <p style={{fontSize:12,fontWeight:900,textAlign:'right',color:f.fark<0?'#dc2626':'#d97706'}}>{f.fark>0?`+${f.fark}`:f.fark}</p>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* VAS Ayrımı */}
           {itemList.length>0&&(
@@ -992,7 +1066,7 @@ export default function MalKabul() {
                 return (
                   <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:'1px solid #f1f5f9'}}>
                     <div style={{flex:1,minWidth:0}}>
-                      <p style={{fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
+                      <p style={{fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi}</p>
                       <p style={{fontSize:10,color:'#94a3b8'}}>Sayılan: {item.adet}{selected?' · VAS transfer edilecek':''}{item.hasarliAdet>0?` · ⚠️${item.hasarliAdet} hasarlı`:''}</p>
                     </div>
                     <button onClick={()=>{
@@ -1033,7 +1107,7 @@ export default function MalKabul() {
               {itemList.filter(item=>(vasItems[item.ean||item.malzemeKodu]||0)<item.adet).map((item,i)=>(
                 <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 0',borderBottom:'1px solid #f1f5f9'}}>
                   <p style={{flex:1,fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-                    {item.urunAdi||item.malzemeKodu}
+                    {item.urunAdi}
                   </p>
                   <input placeholder="Lokasyon"
                     value={mkLokasyonlar[item.ean||item.malzemeKodu]||''}
@@ -1050,7 +1124,7 @@ export default function MalKabul() {
             ➕ Daha Fazla Ürün Say
           </button>
           {isAdmin&&(
-            <button onClick={()=>{ const missing=itemList.find(i=>!mkLokasyonlar[i.ean||i.malzemeKodu]&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet); if(missing){alert((missing.urunAdi||missing.malzemeKodu)+' için lokasyon giriniz');return;} malKabulOnayla(vasItems,mkLokasyonlar);}} disabled={loading||itemList.length===0}
+            <button onClick={()=>{ const missing=itemList.find(i=>!mkLokasyonlar[i.ean||i.malzemeKodu]&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet); if(missing){alert((missing.urunAdi||missing.malzemeKodu||missing.ean||'Ürün')+' için lokasyon giriniz');return;} malKabulOnayla(vasItems,mkLokasyonlar);}} disabled={loading||itemList.length===0}
               style={{...S.btn,width:'100%',background:'#10b981',color:'#fff',opacity:loading?.6:1}}>
               {loading?'Ekleniyor...':'✅ Onayla ve Stoğa Ekle'}
             </button>
@@ -1245,7 +1319,7 @@ function VasCard({ item, onSend }) {
   const [showPicker, setShowPicker] = useState(false);
   return (
     <div style={{background:'#fff',borderRadius:14,padding:'14px 16px',border:'1px solid #e2e8f0',marginBottom:12}}>
-      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean}</p>
+      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean||item.malzemeKodu||'Ürün adı bulunamadı'}</p>
       <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>{(item.malzemeKodu||item.ean)||'-'} · {item.adet} adet</p>
       {!showPicker?(
         <div style={{display:'flex',gap:8}}>
