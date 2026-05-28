@@ -5,6 +5,7 @@ const NAV = [
   { id:'siparis',   label:'Sipariş',      icon:'📋' },
   { id:'iade',      label:'İade',         icon:'↩️' },
   { id:'sayim',     label:'Sayım',        icon:'🔢' },
+  { id:'malkabul', label:'Mal Kabul',   icon:'📥' },
   { id:'raporlar',  label:'Raporlar',     icon:'📊' },
 ];
 
