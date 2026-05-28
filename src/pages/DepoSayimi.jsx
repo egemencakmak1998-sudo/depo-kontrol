@@ -594,8 +594,37 @@ export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
 
   /* ── VAS TAMAMLA → LOKASYONA ── */
   const loadVasItems = useCallback(async()=>{
-    const snap=await getDocs(query(collection(db,'vasItems'),where('durum','==','etiketleme_bekliyor')));
-    setVasList(snap.docs.map(d=>({id:d.id,...d.data()})));
+    const vasSnap=await getDocs(query(collection(db,'vasItems'),where('durum','==','etiketleme_bekliyor')));
+
+    // VAS'a ilk alındığında ürün sistemde yoksa sadece barkod kaydedilmiş olabilir.
+    // Bu yüzden liste açılırken products koleksiyonundan tekrar eşleştiriyoruz.
+    const productSnap=await getDocs(collection(db,'products'));
+    const productMap={};
+
+    productSnap.docs.forEach(d=>{
+      const p=d.data();
+      const ean=String(p.ean||'').trim();
+      const malzemeKodu=String(p.malzemeKodu||'').trim();
+
+      if(ean) productMap[ean]=p;
+      if(malzemeKodu) productMap[malzemeKodu]=p;
+    });
+
+    const enrichedVasList=vasSnap.docs.map(d=>{
+      const item={id:d.id,...d.data()};
+      const ean=String(item.ean||'').trim();
+      const malzemeKodu=String(item.malzemeKodu||'').trim();
+      const product=productMap[ean]||productMap[malzemeKodu];
+
+      return {
+        ...item,
+        ean:item.ean||product?.ean||'',
+        malzemeKodu:item.malzemeKodu||product?.malzemeKodu||'',
+        urunAdi:item.urunAdi||product?.urunAdi||item.ean||item.malzemeKodu||'Ürün'
+      };
+    });
+
+    setVasList(enrichedVasList);
   },[]);
 
   const vasLokasyonaGonder = async(vasItem,lokasyon) => {
@@ -1013,8 +1042,10 @@ function VasCard({ item, onSend }) {
   const [showPicker, setShowPicker] = useState(false);
   return (
     <div style={{background:'#fff',borderRadius:14,padding:'14px 16px',border:'1px solid #e2e8f0',marginBottom:12}}>
-      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean}</p>
-      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>{item.malzemeKodu} · {item.adet} adet</p>
+      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean||item.malzemeKodu}</p>
+      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>
+        {(item.malzemeKodu||item.ean)||'-'} · {item.adet} adet
+      </p>
       {!showPicker?(
         <div style={{display:'flex',gap:8}}>
           <input value={lok} onChange={e=>setLok(e.target.value.toUpperCase())}
