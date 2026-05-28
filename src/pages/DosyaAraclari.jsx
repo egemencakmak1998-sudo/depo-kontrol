@@ -343,8 +343,13 @@ export default function DosyaAraclari() {
               <p style={{fontSize:12,color:result.errors.length?'#92400e':'#166534',marginTop:5}}>
                 Hazır satır: <b>{result.valid.length}</b> · Hatalı satır: <b>{result.errors.length}</b>
               </p>
-              <button onClick={()=>downloadWorkbook(type, result.valid, result.errors)} disabled={result.valid.length===0}
-                style={{...S.btn,marginTop:12,background:'#10b981',color:'#fff',opacity:result.valid.length===0?.5:1}}>
+              {result.valid.length===0 && result.errors.length>0 && (
+                <p style={{fontSize:11,color:'#92400e',marginTop:6}}>
+                  Hazır satır oluşmadı ama dosyayı indirebilirsin. Hatalar Excel içindeki “Hatalı Satırlar” sheet’inde yer alır.
+                </p>
+              )}
+              <button onClick={()=>downloadWorkbook(type, result.valid, result.errors)}
+                style={{...S.btn,marginTop:12,background:'#10b981',color:'#fff'}}>
                 ⬇️ Formatlı Excel İndir
               </button>
             </div>
