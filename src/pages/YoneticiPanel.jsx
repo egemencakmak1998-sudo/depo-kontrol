@@ -85,6 +85,9 @@ function Urunler() {
   const [toast, setToast]       = useState(null);
   const [editingLoc, setEditingLoc] = useState(null);
   const [locValue, setLocValue] = useState('');
+  const [showManual, setShowManual] = useState(false);
+  const [savingManual, setSavingManual] = useState(false);
+  const [manualForm, setManualForm] = useState({ urunAdi:'', ean:'', malzemeKodu:'' });
   const toast$ = (msg,type='info')=>setToast({msg,type,id:Date.now()});
 
   const load = async () => {
@@ -92,6 +95,55 @@ function Urunler() {
     setProducts(snap.docs.map(d=>({id:d.id,...d.data()})));
   };
   useEffect(()=>{load();},[]);
+
+  const addManualProduct = async () => {
+    const urunAdi = manualForm.urunAdi.trim();
+    const ean = manualForm.ean.trim();
+    const malzemeKodu = manualForm.malzemeKodu.trim().toUpperCase();
+
+    if (!urunAdi || !ean || !malzemeKodu) {
+      toast$('Ürün adı, EAN ve malzeme kodu zorunlu','error');
+      return;
+    }
+
+    setSavingManual(true);
+    try {
+      const eanSnap = await getDocs(query(collection(db,'products'), where('ean','==',ean)));
+      if (!eanSnap.empty) {
+        toast$('Bu EAN ile kayıtlı ürün zaten var','warning');
+        setSavingManual(false);
+        return;
+      }
+
+      const codeSnap = await getDocs(query(collection(db,'products'), where('malzemeKodu','==',malzemeKodu)));
+      if (!codeSnap.empty) {
+        toast$('Bu malzeme kodu ile kayıtlı ürün zaten var','warning');
+        setSavingManual(false);
+        return;
+      }
+
+      await addDoc(collection(db,'products'), {
+        urunAdi,
+        ean,
+        malzemeKodu,
+        birim: 'Adet',
+        locations: ['BELIRLENECEK'],
+        lokasyon: 'BELIRLENECEK',
+        lokasyonDurumu: 'atanmadi',
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      });
+
+      toast$('Ürün manuel olarak eklendi ✓','success');
+      setManualForm({ urunAdi:'', ean:'', malzemeKodu:'' });
+      setShowManual(false);
+      load();
+    } catch(e) {
+      toast$('Hata: '+e.message,'error');
+    } finally {
+      setSavingManual(false);
+    }
+  };
 
   const importExcel = async (file) => {
     setImp(true);
@@ -215,6 +267,9 @@ function Urunler() {
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
         <p style={{fontWeight:700,color:'#0f172a',fontSize:15}}>📦 Ürünler ({products.length})</p>
         <div style={{display:'flex',gap:8}}>
+          <button onClick={()=>setShowManual(true)} style={{background:'linear-gradient(135deg,#10b981,#059669)',color:'#fff',padding:'7px 12px',borderRadius:10,fontSize:11,fontWeight:700,cursor:'pointer',border:'none'}}>
+            ➕ Manuel Ürün
+          </button>
           <label style={{background:'linear-gradient(135deg,#3b82f6,#6366f1)',color:'#fff',padding:'7px 12px',borderRadius:10,fontSize:11,fontWeight:700,cursor:'pointer'}}>
             {importing?'Yükleniyor...':'📥 Excel Yükle'}
             <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>importExcel(e.target.files[0])} disabled={importing} />
@@ -236,6 +291,21 @@ function Urunler() {
           <span style={{fontSize:11,color:'#64748b',background:'#f1f5f9',padding:'2px 8px',borderRadius:6,flexShrink:0}}>{p.birim||'Adet'}</span>
         </div>
       ))}
+      {showManual&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(15,23,42,.45)',zIndex:9998,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+          <div style={{background:'#fff',borderRadius:16,padding:18,width:'100%',maxWidth:420,boxShadow:'0 20px 45px rgba(0,0,0,.2)'}}>
+            <p style={{fontSize:15,fontWeight:800,color:'#0f172a',marginBottom:4}}>Manuel Ürün Ekle</p>
+            <p style={{fontSize:12,color:'#64748b',marginBottom:12}}>Ürün sisteme lokasyonu BELIRLENECEK olarak eklenir. Lokasyonu sonradan düzenleyebilirsin.</p>
+            <input value={manualForm.urunAdi} onChange={e=>setManualForm(p=>({...p,urunAdi:e.target.value}))} placeholder="Ürün adı" style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',marginBottom:8}} />
+            <input value={manualForm.ean} onChange={e=>setManualForm(p=>({...p,ean:e.target.value.replace(/\s/g,'')}))} placeholder="Barkod / EAN" inputMode="numeric" style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',fontFamily:'monospace',marginBottom:8}} />
+            <input value={manualForm.malzemeKodu} onChange={e=>setManualForm(p=>({...p,malzemeKodu:e.target.value.toUpperCase()}))} placeholder="Malzeme kodu" style={{width:'100%',border:'2px solid #e2e8f0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',fontFamily:'monospace',marginBottom:12}} />
+            <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+              <button onClick={()=>{setShowManual(false);setManualForm({ urunAdi:'', ean:'', malzemeKodu:'' });}} disabled={savingManual} style={{background:'#f1f5f9',border:'none',color:'#475569',padding:'9px 14px',borderRadius:10,fontWeight:700,cursor:'pointer'}}>İptal</button>
+              <button onClick={addManualProduct} disabled={savingManual} style={{background:'#10b981',border:'none',color:'#fff',padding:'9px 14px',borderRadius:10,fontWeight:700,cursor:'pointer',opacity:savingManual?0.6:1}}>{savingManual?'Ekleniyor...':'Ürünü Ekle'}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {editingLoc&&(
         <div style={{position:'fixed',inset:0,background:'rgba(15,23,42,.45)',zIndex:9998,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
           <div style={{background:'#fff',borderRadius:16,padding:18,width:'100%',maxWidth:420,boxShadow:'0 20px 45px rgba(0,0,0,.2)'}}>
