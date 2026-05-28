@@ -88,6 +88,7 @@ function Urunler() {
   const [editingProduct, setEditingProduct] = useState(null);
   const [productForm, setProductForm] = useState({ urunAdi:'', ean:'', malzemeKodu:'', birim:'Adet' });
   const [productFilter, setProductFilter] = useState('tum');
+  const [visibleLimit, setVisibleLimit] = useState(50);
   const [showManual, setShowManual] = useState(false);
   const [savingManual, setSavingManual] = useState(false);
   const [manualForm, setManualForm] = useState({ urunAdi:'', ean:'', malzemeKodu:'' });
@@ -98,6 +99,10 @@ function Urunler() {
     setProducts(snap.docs.map(d=>({id:d.id,...d.data()})));
   };
   useEffect(()=>{load();},[]);
+
+  useEffect(()=>{
+    setVisibleLimit(50);
+  },[search, productFilter]);
 
   const addManualProduct = async () => {
     const urunAdi = manualForm.urunAdi.trim();
@@ -301,7 +306,7 @@ function Urunler() {
     return true;
   };
 
-  const filtered=products.filter(p=>{
+  const allFilteredProducts=products.filter(p=>{
     const q = search.toLowerCase();
     const matchesSearch =
       String(p.urunAdi||'').toLowerCase().includes(q)||
@@ -309,7 +314,8 @@ function Urunler() {
       String(p.malzemeKodu||'').toLowerCase().includes(q)||
       getLocationText(p).toLowerCase().includes(q);
     return matchesSearch && matchesProductFilter(p);
-  }).slice(0,50);
+  });
+  const filtered=allFilteredProducts.slice(0,visibleLimit);
 
   return (
     <div>
@@ -337,11 +343,19 @@ function Urunler() {
           ['eksikMalzeme','Eksik Malzeme Kodu'],
           ['lokasyonYok','Lokasyonu Belirlenmemiş'],
         ].map(([key,label])=>(
-          <button key={key} onClick={()=>setProductFilter(key)}
+          <button key={key} onClick={()=>{setProductFilter(key);setVisibleLimit(50);}}
             style={{whiteSpace:'nowrap',border:'1px solid '+(productFilter===key?'#3b82f6':'#e2e8f0'),background:productFilter===key?'#eff6ff':'#fff',color:productFilter===key?'#1d4ed8':'#64748b',borderRadius:999,padding:'6px 10px',fontSize:11,fontWeight:700,cursor:'pointer'}}>
             {label}
           </button>
         ))}
+      </div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:10,background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:10,padding:'8px 10px'}}>
+        <p style={{fontSize:12,color:'#475569',fontWeight:700}}>
+          Listede: {filtered.length} / {allFilteredProducts.length} ürün gösteriliyor
+        </p>
+        <p style={{fontSize:11,color:'#94a3b8'}}>
+          Toplam ürün: {products.length}
+        </p>
       </div>
       {filtered.map(p=>(
         <div key={p.id} style={{background:'#fff',borderRadius:10,padding:'10px 12px',marginBottom:6,border:'1px solid #e2e8f0',display:'flex',gap:10,alignItems:'center'}}>
@@ -355,6 +369,17 @@ function Urunler() {
           <span style={{fontSize:11,color:'#64748b',background:'#f1f5f9',padding:'2px 8px',borderRadius:6,flexShrink:0}}>{p.birim||'Adet'}</span>
         </div>
       ))}
+      {allFilteredProducts.length>filtered.length&&(
+        <button onClick={()=>setVisibleLimit(prev=>prev+50)}
+          style={{width:'100%',background:'#f1f5f9',border:'1px solid #cbd5e1',color:'#475569',borderRadius:10,padding:'10px 12px',fontSize:12,fontWeight:800,cursor:'pointer',margin:'8px 0 12px'}}>
+          Daha Fazla Göster ({Math.min(50, allFilteredProducts.length-filtered.length)} ürün daha)
+        </button>
+      )}
+      {allFilteredProducts.length===0&&products.length>0&&(
+        <div style={{textAlign:'center',padding:'24px 0',color:'#94a3b8'}}>
+          <p style={{fontSize:13,fontWeight:700}}>Bu arama/filtreye uygun ürün bulunamadı</p>
+        </div>
+      )}
       {showManual&&(
         <div style={{position:'fixed',inset:0,background:'rgba(15,23,42,.45)',zIndex:9998,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
           <div style={{background:'#fff',borderRadius:16,padding:18,width:'100%',maxWidth:420,boxShadow:'0 20px 45px rgba(0,0,0,.2)'}}>
