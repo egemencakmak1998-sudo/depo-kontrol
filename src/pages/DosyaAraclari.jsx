@@ -187,10 +187,11 @@ function buildOutput(type, rows) {
       const ean = digitsOnly(get(row, 'ean'));
       const urunAdi = clean(get(row, 'urunAdi'));
       const adet = toInt(get(row, 'adet'));
-      if (!ean && !malzemeKodu) return addError(rowNo, 'EAN veya Malzeme Kodu zorunlu', row);
+      const hasIdentity = !!ean || (!!malzemeKodu && !!urunAdi);
+      if (!hasIdentity) return addError(rowNo, 'EAN veya (Malzeme Kodu + Ürün Adı) zorunlu', row);
       if (adet <= 0) return addError(rowNo, 'Adet eksik/geçersiz', row);
 
-      const key = ean || malzemeKodu;
+      const key = ean || `${malzemeKodu}__${urunAdi}`;
       const prev = grouped.get(key) || { malzemeKodu, ean, urunAdi, adet:0 };
       prev.adet += adet;
       if (!prev.malzemeKodu && malzemeKodu) prev.malzemeKodu = malzemeKodu;
@@ -206,16 +207,19 @@ function buildOutput(type, rows) {
       const malzemeKodu = clean(get(row, 'malzemeKodu'));
       const urunAdi = clean(get(row, 'urunAdi'));
       const adet = toInt(get(row, 'adet'));
+      const hasIdentity = !!ean || (!!malzemeKodu && !!urunAdi);
       const missing = [];
       if (!lokasyon) missing.push('Lokasyon');
-      if (!ean) missing.push('EAN');
+      if (!hasIdentity) missing.push('EAN veya (Malzeme Kodu + Ürün Adı)');
       if (adet <= 0) missing.push('Beklenen Adet');
       if (missing.length) return addError(rowNo, `Eksik/geçersiz alan: ${missing.join(', ')}`, row);
 
-      const key = `${lokasyon}__${ean}`;
+      const identityKey = ean || `${malzemeKodu}__${urunAdi}`;
+      const key = `${lokasyon}__${identityKey}`;
       const prev = grouped.get(key) || { lokasyon, ean, malzemeKodu, urunAdi, adet:0 };
       prev.adet += adet;
       if (!prev.malzemeKodu && malzemeKodu) prev.malzemeKodu = malzemeKodu;
+      if (!prev.ean && ean) prev.ean = ean;
       if (!prev.urunAdi && urunAdi) prev.urunAdi = urunAdi;
       grouped.set(key, prev);
       return;
@@ -273,6 +277,7 @@ export default function DosyaAraclari() {
   const [result, setResult] = useState(null);
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
   const toast$ = (msg, type = 'info') => setToast({ msg, type, id: Date.now() });
 
   const cfg = FORMAT_TYPES[type];
@@ -292,6 +297,33 @@ export default function DosyaAraclari() {
       toast$('Dosya okunamadı: ' + e.message, 'error');
     }
     setLoading(false);
+  };
+
+  const isSupportedFile = (file) => /\.(xlsx|xls|csv)$/i.test(file?.name || '');
+
+  const handleDrop = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    const file = e.dataTransfer?.files?.[0];
+    if (!file) return;
+    if (!isSupportedFile(file)) {
+      toast$('Sadece .xlsx, .xls veya .csv dosyası yükleyebilirsiniz', 'error');
+      return;
+    }
+    await handleFile(file);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dragActive) setDragActive(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
   };
 
   const S = {
@@ -321,17 +353,50 @@ export default function DosyaAraclari() {
           </div>
         </div>
 
-        <div style={S.card}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12,marginBottom:12}}>
-            <div>
+        <div
+          style={{
+            ...S.card,
+            border: dragActive ? '2px dashed #2563eb' : '1px solid #e2e8f0',
+            background: dragActive ? '#eff6ff' : '#fff',
+            transition: 'all .15s ease',
+          }}
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          onDragEnter={handleDragOver}
+          onDragLeave={handleDragLeave}
+        >
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12,marginBottom:12,flexWrap:'wrap'}}>
+            <div style={{flex:1,minWidth:220}}>
               <p style={{fontSize:14,fontWeight:800,color:'#0f172a'}}>{cfg.title}</p>
               <p style={{fontSize:12,color:'#64748b',marginTop:4}}>Çıktı kolonları: <b>{cfg.columns.join(' · ')}</b></p>
+              {(type==='depoSayim' || type==='malKabul') && (
+                <p style={{fontSize:11,color:'#475569',marginTop:6}}>Geçerli kimlik alanı: <b>EAN</b> veya <b>Malzeme Kodu + Ürün Adı</b></p>
+              )}
             </div>
-            <label style={{...S.btn,background:'#1e40af',color:'#fff',display:'inline-block',whiteSpace:'nowrap'}}>
+            <label style={{...S.btn,background:'#1e40af',color:'#fff',display:'inline-block',whiteSpace:'nowrap',width:'auto'}}>
               📂 Dosya Seç
               <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>{handleFile(e.target.files?.[0]); e.target.value='';}} />
             </label>
           </div>
+
+          <div style={{
+            border:'1.5px dashed '+(dragActive?'#2563eb':'#cbd5e1'),
+            borderRadius:14,
+            padding:'18px 14px',
+            textAlign:'center',
+            background:dragActive?'#dbeafe':'#f8fafc',
+            color:dragActive?'#1d4ed8':'#64748b',
+            marginBottom:fileName || loading ? 12 : 0,
+          }}>
+            <p style={{fontSize:22,marginBottom:6}}>📎</p>
+            <p style={{fontSize:13,fontWeight:800,color:dragActive?'#1d4ed8':'#334155'}}>
+              Dosyayı buraya sürükleyip bırak
+            </p>
+            <p style={{fontSize:11,marginTop:4,lineHeight:1.35}}>
+              Mobilde yukarıdaki <b>Dosya Seç</b> butonunu kullan. Desteklenen formatlar: .xlsx, .xls, .csv
+            </p>
+          </div>
+
           {fileName && <p style={{fontSize:12,color:'#64748b',marginBottom:8}}>Seçilen dosya: <b>{fileName}</b></p>}
           {loading && <p style={{fontSize:13,color:'#3b82f6',fontWeight:700}}>Dosya işleniyor...</p>}
         </div>
