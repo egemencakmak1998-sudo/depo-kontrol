@@ -68,10 +68,10 @@ export default function Layout({ page, navigate, profile, children }) {
 
       {/* Mobile bottom nav */}
       <div style={C.bottomNav} className="mobile-only">
-        {navItems.slice(0,5).map(n => (
-          <button key={n.id} style={C.bottomItem(page===n.id)} onClick={() => navigate(n.id)}>
-            <span style={{ fontSize:20 }}>{n.icon}</span>
-            <span>{n.label}</span>
+        {navItems.map(n => (
+          <button key={n.id} style={{...C.bottomItem(page===n.id), padding:navItems.length>5?'6px 2px':'8px 6px', minWidth:0, flex:1}} onClick={() => navigate(n.id)}>
+            <span style={{ fontSize:navItems.length>5?16:20 }}>{n.icon}</span>
+            <span style={{ fontSize:navItems.length>5?9:11, marginTop:1 }}>{n.label}</span>
           </button>
         ))}
       </div>
