@@ -182,7 +182,7 @@ function LokPicker({ onSelect, currentLok }) {
 }
 
 /* ── SAYIM EKRANI ── */
-function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBack, requireKnownProduct = false, referenceItems = [] }) {
+function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBack, requireKnownProduct = false, referenceItems = [], displayName = '' }) {
   const { user, profile } = useAuth();
   const [entries, setEntries] = useState({});
   const [hasarlilar, setHasarlilar] = useState({});
@@ -242,23 +242,22 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
     if(!rawCode) return false;
 
     const product = getProductByCode(rawCode);
+    let warning = '';
     if(requireKnownProduct && !product){
-      toast$(`Ürün havuzunda bulunamadı: ${rawCode}`,'error');
-      return false;
+      warning = `Ürün havuzunda yok / referans dışı: ${rawCode}`;
     }
 
     if(requireKnownProduct && referenceItems.length > 0){
       const possibleKeys = [rawCode, product?.ean, product?.malzemeKodu].filter(Boolean).map(k=>String(k).trim());
       const inReference = possibleKeys.some(k=>referenceKeySet.has(k));
       if(!inReference){
-        toast$(`Bu ürün referans dosyasında yok: ${rawCode}`,'error');
-        return false;
+        warning = product ? `Referans dışı yanlış ürün: ${product.urunAdi || rawCode}` : warning;
       }
     }
 
     const key = product?.ean || product?.malzemeKodu || rawCode;
     setEntries(prev=>({...prev,[key]:(prev[key]||0)+1}));
-    toast$(product?.urunAdi || rawCode,'success');
+    toast$(warning || product?.urunAdi || rawCode, warning ? 'warning' : 'success');
     return true;
   },[getProductByCode, requireKnownProduct, referenceItems, referenceKeySet]);
 
@@ -302,12 +301,16 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
     try {
       const items = Object.entries(entries).map(([key,adet])=>{
         const product = products[key] || {};
+        const possibleKeys = [key, product.ean, product.malzemeKodu].filter(Boolean).map(k=>String(k).trim());
+        const inReference = referenceItems?.length ? possibleKeys.some(k=>referenceKeySet.has(k)) : true;
         return {
           ean: product.ean || key,
           adet,
           urunAdi: product.urunAdi || '',
           malzemeKodu: product.malzemeKodu || '',
           hasarliAdet: hasarlilar[key] || 0,
+          referansDisi: referenceItems?.length ? !inReference : false,
+          urunHavuzundaYok: !product?.ean && !product?.malzemeKodu,
         };
       });
       const ref = await addDoc(collection(db,'countEntries'),{
@@ -335,7 +338,7 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
       <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
         <button onClick={onBack} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
         <div style={{flex:1}}>
-          <p style={{color:'#fff',fontWeight:700,fontSize:14}}>📍 {lokasyon}</p>
+          <p style={{color:'#fff',fontWeight:700,fontSize:14}}>{sessionTip==='mal_kabul' ? `📥 ${displayName || 'MAL KABUL'}` : '📍 '+lokasyon}</p>
           <p style={{color:'#94a3b8',fontSize:11}}>{itemList.length} kalem · {toplamAdet} adet{toplamHasar>0?` · ⚠️ ${toplamHasar} hasarlı`:''}</p>
         </div>
         <button onClick={handleSubmit} disabled={saving}
@@ -443,6 +446,9 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
               <div style={{flex:1,minWidth:0}}>
                 <p style={{fontSize:13,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.urunAdi||ean}</p>
                 <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{p.malzemeKodu||ean}{hasar>0&&<span style={{color:'#d97706',marginLeft:8}}>⚠️ {hasar} hasarlı</span>}</p>
+                {referenceItems.length>0 && ![ean,p.ean,p.malzemeKodu].filter(Boolean).some(k=>referenceKeySet.has(String(k).trim())) &&
+                  <p style={{fontSize:10,color:'#d97706',fontWeight:700,marginTop:2}}>⚠️ Referans dışı / yanlış ürün</p>}
+                {!p.urunAdi && <p style={{fontSize:10,color:'#ef4444',fontWeight:700,marginTop:2}}>⚠️ Ürün havuzunda yok</p>}
               </div>
               <div style={{display:'flex',alignItems:'center',gap:5,flexShrink:0}}>
                 <button onClick={()=>setEntries(prev=>({...prev,[ean]:Math.max(0,adet-1)}))}
@@ -481,6 +487,7 @@ export default function MalKabul() {
   const [mkTur, setMkTur] = useState('manuel');
   const [mkRef, setMkRef] = useState([]);
   const [mkEntries, setMkEntries] = useState([]);
+  const [mkName, setMkName] = useState('');
   // VAS
   const [vasItems, setVasItems] = useState({});
   const [mkLokasyonlar, setMkLokasyonlar] = useState({}); // ean -> lokasyon (mal kabul direkt)
@@ -632,9 +639,10 @@ export default function MalKabul() {
     if(mkTur==='referansli'&&mkRef.length===0){toast$('Referans dosyası seçin','error');return;}
     setLoading(true);
     try {
+      const finalMkName = (mkName || '').trim() || `Mal Kabul - ${new Date().toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}`;
       if(!activeSession){
         const payload={
-          tip:'mal_kabul',durum:'aktif',
+          tip:'mal_kabul',durum:'aktif',sessionName:finalMkName,
           baslatan:profile?.name||user?.email||'',
           baslantanId:user?.uid||'',
           baslangic:Timestamp.now(),
@@ -650,10 +658,11 @@ export default function MalKabul() {
       }else{
         await updateDoc(doc(db,'countSessions',activeSession.id),{
           mkTur,
+          sessionName:finalMkName,
           referenceItems:mkTur==='referansli'?mkRef:[],
           updatedAt:Timestamp.now()
         });
-        setActiveSession(prev=>prev?{...prev,mkTur,referenceItems:mkTur==='referansli'?mkRef:[]}:prev);
+        setActiveSession(prev=>prev?{...prev,mkTur,sessionName:finalMkName,referenceItems:mkTur==='referansli'?mkRef:[]}:prev);
       }
       setView('mk_sayim');
     }catch(e){toast$('Hata: '+e.message,'error');}
@@ -664,6 +673,7 @@ export default function MalKabul() {
     setActiveSession(s);
     setMkTur(s.mkTur || (s.referenceItems?.length ? 'referansli' : 'manuel'));
     setMkRef(s.referenceItems || []);
+    setMkName(s.sessionName || '');
     setVasItems(s.vasTransferItems || {});
     setMkLokasyonlar(s.mkLokasyonlar || {});
     const entries = await loadEntries(s.id);
@@ -682,7 +692,7 @@ export default function MalKabul() {
     }catch(e){/* offline/permission durumunda ekran akışını bozma */}
   };
 
-  /* ── MAL KABUL ONAY + VAS AYRIMI ── */
+  /* ── MAL KABUL ONAYA GÖNDER ── */
   const malKabulOnayla = async(vasMap, lokasyonlarMap) => {
     if(!activeSession) return;
     setLoading(true);
@@ -691,63 +701,48 @@ export default function MalKabul() {
       const allItems={};
       snap.docs.forEach(d=>{
         (d.data().items||[]).forEach(item=>{
-          const key=item.malzemeKodu||item.ean;
+          const key=item.ean||item.malzemeKodu;
+          if(!key) return;
           if(!allItems[key]) allItems[key]={...item,adet:0,hasarliAdet:0};
           allItems[key].adet+=item.adet;
           allItems[key].hasarliAdet+=(item.hasarliAdet||0);
+          allItems[key].referansDisi = allItems[key].referansDisi || item.referansDisi || false;
+          allItems[key].urunHavuzundaYok = allItems[key].urunHavuzundaYok || item.urunHavuzundaYok || false;
         });
       });
+      const itemList=Object.values(allItems);
+      const toplamAdet=itemList.reduce((a,i)=>a+(i.adet||0),0);
+      const vasAdet=itemList.reduce((a,i)=>a+(vasMap[i.ean||i.malzemeKodu]||0),0);
+      const referansDisiAdet=itemList.filter(i=>i.referansDisi).length;
+      const havuzDisiAdet=itemList.filter(i=>i.urunHavuzundaYok).length;
 
-      const now=Timestamp.now();
-      const stockSnap=await getDocs(collection(db,'stock'));
-      const stockMap={};
-      stockSnap.docs.forEach(d=>{stockMap[d.id]=d.data();});
-
-      const batch=writeBatch(db);
-      const movBatch=writeBatch(db);
-      const vasItemsToSave=[];
-
-      Object.values(allItems).forEach(item=>{
-        if(!item.ean) return;
-        const vasAdet=vasMap[item.ean||item.malzemeKodu]||0;
-        const lokAdet=item.adet-vasAdet;
-        const prev=(stockMap[item.ean]?.miktar)||0;
-        const next=prev+item.adet;
-        const lok=lokasyonlarMap[item.ean]||lokasyonlarMap[item.malzemeKodu]||'';
-        const prevByLok=stockMap[item.ean]?.byLocation||{};
-        const newByLok=lok&&lokAdet>0?{...prevByLok,[lok]:(prevByLok[lok]||0)+lokAdet}:prevByLok;
-
-        batch.set(doc(db,'stock',item.ean),{ean:item.ean,miktar:next,
-          urunAdi:item.urunAdi||'',malzemeKodu:item.malzemeKodu||'',
-          byLocation:newByLok,sonGuncelleme:now},{merge:true});
-
-        movBatch.set(doc(collection(db,'stockMovements')),{
-          tarih:now,tip:'mal_kabul',ean:item.ean,
-          malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',
-          miktar:item.adet,oncekiMiktar:prev,sonrakiMiktar:next,
-          hasarliAdet:item.hasarliAdet||0,
-          vasAdet,lokAdet,
-          kaynak:`mal_kabul:${activeSession.id}`,
-          yapan:profile?.name||user?.email||'',yapanId:user?.uid||''
-        });
-
-        if(vasAdet>0){
-          vasItemsToSave.push({ean:item.ean,malzemeKodu:item.malzemeKodu||'',
-            urunAdi:item.urunAdi||'',adet:vasAdet,
-            sessionId:activeSession.id,durum:'etiketleme_bekliyor',tarih:now});
-        }
+      await updateDoc(doc(db,'countSessions',activeSession.id),{
+        durum:'onay_bekliyor',
+        onayBekliyor:true,
+        onayli:false,
+        approvalType:'mal_kabul',
+        sessionName:activeSession.sessionName || mkName || 'Mal Kabul',
+        vasTransferItems:vasMap,
+        mkLokasyonlar:lokasyonlarMap,
+        approvalSummary:{
+          kalem:itemList.length,
+          toplamAdet,
+          vasAdet,
+          lokasyonaGidecekAdet:toplamAdet-vasAdet,
+          referansDisiKalem:referansDisiAdet,
+          urunHavuzundaOlmayanKalem:havuzDisiAdet,
+          referenceCount:mkRef.length,
+        },
+        onayaGonderen:profile?.name||user?.email||'',
+        onayaGonderenId:user?.uid||'',
+        onayaGondermeTarihi:Timestamp.now(),
+        updatedAt:Timestamp.now()
       });
-
-      await batch.commit();
-      await movBatch.commit();
-
-      // VAS kayıtları
-      for(const vi of vasItemsToSave){
-        await addDoc(collection(db,'vasItems'),vi);
-      }
-
-      await updateDoc(doc(db,'countSessions',activeSession.id),{durum:'tamamlandi',bitis:now});
-      toast$('Mal kabul stoğa eklendi ✓','success');
+      toast$('Mal kabul yönetici onayına gönderildi ✓','success');
+      setActiveSession(null);
+      setMkEntries([]);
+      setVasItems({});
+      setMkLokasyonlar({});
       setView('list');
       loadSessions();
     }catch(e){toast$('Hata: '+e.message,'error');}
@@ -826,6 +821,7 @@ export default function MalKabul() {
       sessionTip="mal_kabul" products={products}
       requireKnownProduct={mkTur==='referansli'}
       referenceItems={mkTur==='referansli' ? mkRef : []}
+      displayName={activeSession.sessionName || mkName || 'MAL KABUL'}
       onSubmit={(id,items)=>{setMkEntries(prev=>[...prev,{id,items}]);setView('mk_ozet');}}
       onBack={()=>setView('list')}/>;
   }
@@ -873,6 +869,12 @@ export default function MalKabul() {
         </div>
         <div style={{padding:16}}>
           <div style={S.card}>
+            <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:8}}>Mal Kabul Adı</p>
+            <input value={mkName} onChange={e=>setMkName(e.target.value)} placeholder="Örn: 29.05 GHD 1. Sevkiyat / Sephora Palet 1"
+              style={{width:'100%',padding:'10px 12px',border:'1px solid #e2e8f0',borderRadius:10,fontSize:13,outline:'none'}} />
+            <p style={{fontSize:11,color:'#94a3b8',marginTop:6}}>Boş bırakırsan sistem otomatik ad verir.</p>
+          </div>
+          <div style={S.card}>
             <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:10}}>Sayım Türü</p>
             <div style={{display:'flex',gap:10}}>
               {[['manuel','Manuel'],['referansli','Referanslı']].map(([t,l])=>(
@@ -917,11 +919,36 @@ export default function MalKabul() {
         if(!allItems[key]) allItems[key]={...item,adet:0,hasarliAdet:0};
         allItems[key].adet+=item.adet;
         allItems[key].hasarliAdet+=(item.hasarliAdet||0);
+        allItems[key].referansDisi = allItems[key].referansDisi || item.referansDisi || false;
+        allItems[key].urunHavuzundaYok = allItems[key].urunHavuzundaYok || item.urunHavuzundaYok || false;
       });
     });
     const itemList=Object.values(allItems);
     const toplam=itemList.reduce((a,i)=>a+i.adet,0);
     const toplamHasar=itemList.reduce((a,i)=>a+(i.hasarliAdet||0),0);
+
+    const getItemInfo = (item) => {
+      const eanKey = String(item?.ean || '').trim();
+      const malzemeKey = String(item?.malzemeKodu || '').trim();
+      const p = products[eanKey] || products[malzemeKey] || {};
+      return {
+        urunAdi: p.urunAdi || item.urunAdi || 'Ürün adı bulunamadı',
+        ean: p.ean || item.ean || '',
+        malzemeKodu: p.malzemeKodu || item.malzemeKodu || '',
+      };
+    };
+
+    const ItemKodDetay = ({ item }) => {
+      const info = getItemInfo(item);
+      return (
+        <div style={{marginTop:3}}>
+          <p style={{fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{info.urunAdi}</p>
+          <p style={{fontSize:10,color:'#64748b',fontFamily:'monospace',marginTop:2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+            Malzeme: {info.malzemeKodu || '-'} · EAN: {info.ean || '-'}
+          </p>
+        </div>
+      );
+    };
 
     const refMap=Object.fromEntries(mkRef.map(r=>[r.malzemeKodu,r]));
     const tamEslesen=mkRef.length>0&&itemList.every(item=>{
@@ -941,6 +968,8 @@ export default function MalKabul() {
             <p style={{fontSize:12,color:'#166534',marginTop:4}}>{itemList.length} kalem · {toplam.toLocaleString()} adet{toplamHasar>0?` · ⚠️ ${toplamHasar} hasarlı`:''}</p>
             {tamEslesen&&<p style={{fontSize:12,color:'#10b981',marginTop:4,fontWeight:600}}>✅ Referans ile tam eşleşme</p>}
             {mkRef.length>0&&!tamEslesen&&<p style={{fontSize:12,color:'#d97706',marginTop:4,fontWeight:600}}>⚠️ Referans ile fark var</p>}
+            {itemList.some(i=>i.referansDisi)&&<p style={{fontSize:12,color:'#d97706',marginTop:4,fontWeight:700}}>⚠️ Referans dışı / yanlış ürün var</p>}
+            {itemList.some(i=>i.urunHavuzundaYok)&&<p style={{fontSize:12,color:'#ef4444',marginTop:4,fontWeight:700}}>⚠️ Ürün havuzunda olmayan barkod var</p>}
           </div>
 
           {/* VAS Ayrımı */}
@@ -954,8 +983,8 @@ export default function MalKabul() {
                 return (
                   <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:'1px solid #f1f5f9'}}>
                     <div style={{flex:1,minWidth:0}}>
-                      <p style={{fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
-                      <p style={{fontSize:10,color:'#94a3b8'}}>Sayılan: {item.adet}{selected?' · VAS transfer edilecek':''}{item.hasarliAdet>0?` · ⚠️${item.hasarliAdet} hasarlı`:''}</p>
+                      <ItemKodDetay item={item} />
+                      <p style={{fontSize:10,color:'#94a3b8',marginTop:2}}>Sayılan: {item.adet}{selected?' · VAS transfer edilecek':''}{item.hasarliAdet>0?` · ⚠️${item.hasarliAdet} hasarlı`:''}</p>
                     </div>
                     <button onClick={()=>{
                       const next={...vasItems,[key]:selected?0:item.adet};
@@ -994,9 +1023,9 @@ export default function MalKabul() {
               </div>
               {itemList.filter(item=>(vasItems[item.ean||item.malzemeKodu]||0)<item.adet).map((item,i)=>(
                 <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 0',borderBottom:'1px solid #f1f5f9'}}>
-                  <p style={{flex:1,fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-                    {item.urunAdi||item.malzemeKodu}
-                  </p>
+                  <div style={{flex:1,minWidth:0}}>
+                    <ItemKodDetay item={item} />
+                  </div>
                   <input placeholder="Lokasyon"
                     value={mkLokasyonlar[item.ean||item.malzemeKodu]||''}
                     onChange={e=>{const next={...mkLokasyonlar,[item.ean||item.malzemeKodu]:e.target.value.trim().toUpperCase()};setMkLokasyonlar(next);persistMalKabulOptions(vasItems,next);}}
@@ -1011,12 +1040,10 @@ export default function MalKabul() {
             style={{...S.btn,width:'100%',background:'#3b82f6',color:'#fff',marginBottom:10}}>
             ➕ Daha Fazla Ürün Say
           </button>
-          {isAdmin&&(
-            <button onClick={()=>{ const missing=itemList.find(i=>!mkLokasyonlar[i.ean||i.malzemeKodu]&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet); if(missing){alert((missing.urunAdi||missing.malzemeKodu)+' için lokasyon giriniz');return;} malKabulOnayla(vasItems,mkLokasyonlar);}} disabled={loading||itemList.length===0}
-              style={{...S.btn,width:'100%',background:'#10b981',color:'#fff',opacity:loading?.6:1}}>
-              {loading?'Ekleniyor...':'✅ Onayla ve Stoğa Ekle'}
-            </button>
-          )}
+          <button onClick={()=>{ const missing=itemList.find(i=>!mkLokasyonlar[i.ean||i.malzemeKodu]&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet); if(missing){const info=getItemInfo(missing); alert((info.urunAdi||info.malzemeKodu||info.ean)+' için lokasyon giriniz');return;} malKabulOnayla(vasItems,mkLokasyonlar);}} disabled={loading||itemList.length===0}
+            style={{...S.btn,width:'100%',background:'#10b981',color:'#fff',opacity:loading?.6:1}}>
+            {loading?'Gönderiliyor...':'✅ Onaya Gönder'}
+          </button>
         </div>
       </div>
     );
@@ -1121,7 +1148,7 @@ export default function MalKabul() {
           </div>
         )}
         {isMalKabulModule && (
-          <button onClick={()=>{setActiveSession(null);setMkTur('manuel');setMkRef([]);setMkEntries([]);setVasItems({});setMkLokasyonlar({});setView('mal_kabul');}} disabled={loading}
+          <button onClick={()=>{setActiveSession(null);setMkTur('manuel');setMkRef([]);setMkEntries([]);setVasItems({});setMkLokasyonlar({});setMkName('');setView('mal_kabul');}} disabled={loading}
             style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',marginBottom:16}}>
             📥 Mal Kabul Sayımı Başlat
           </button>
@@ -1134,9 +1161,16 @@ export default function MalKabul() {
               <div key={s.id} style={{...S.card,border:'1px solid #bfdbfe',background:'#eff6ff'}}>
                 <div style={{display:'flex',alignItems:'center',gap:10}}>
                   <div style={{flex:1}}>
-                    <p style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>{s.tip==='genel'?'📦 Genel Sayım':'📥 Mal Kabul'}</p>
+                    <p style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>{s.tip==='genel'?'📦 Genel Sayım':`📥 ${s.sessionName || 'Mal Kabul'}`}</p>
                     <p style={{fontSize:11,color:'#64748b'}}>{s.baslatan} · {s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||''}</p>
                   </div>
+                  {s.tip==='mal_kabul'&&(
+                    <button onClick={()=>editMalKabulName(s)}
+                      style={{...S.btn,background:'#f1f5f9',color:'#475569',padding:'8px 10px',fontSize:12}}
+                      title="Mal kabul adını düzenle">
+                      ✏️ İsim
+                    </button>
+                  )}
                   <button onClick={()=>{if(s.tip==='mal_kabul') openMalKabulSession(s); else {setActiveSession(s);loadEntries(s.id);setView('genel_lok');}}}
                     style={{...S.btn,background:'#1e40af',color:'#fff',padding:'8px 14px',fontSize:12}}>
                     {s.baslantanId===user?.uid?'Devam →':'Katıl →'}
@@ -1160,9 +1194,15 @@ export default function MalKabul() {
               <div key={s.id} style={S.card}>
                 <div style={{display:'flex',alignItems:'center',gap:10}}>
                   <div style={{flex:1}}>
-                    <p style={{fontSize:13,fontWeight:600,color:'#475569'}}>{s.tip==='genel'?'📦 Genel Sayım':'📥 Mal Kabul'}</p>
+                    <p style={{fontSize:13,fontWeight:600,color:'#475569'}}>{s.tip==='genel'?'📦 Genel Sayım':`📥 ${s.sessionName || 'Mal Kabul'}`}</p>
                     <p style={{fontSize:11,color:'#94a3b8'}}>{s.baslatan} · {s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||''}</p>
                   </div>
+                  {s.tip==='mal_kabul'&&(
+                    <button onClick={()=>editMalKabulName(s)}
+                      style={{...S.btn,background:'#f1f5f9',color:'#475569',padding:'6px 10px',fontSize:11}}>
+                      ✏️ İsim
+                    </button>
+                  )}
                   {isAdmin&&s.tip==='genel'&&(
                     <button onClick={()=>exportGenelSayim(s.id)}
                       style={{...S.btn,background:'#f1f5f9',color:'#475569',padding:'6px 10px',fontSize:11}}>
@@ -1193,8 +1233,8 @@ function VasCard({ item, onSend }) {
   const [showPicker, setShowPicker] = useState(false);
   return (
     <div style={{background:'#fff',borderRadius:14,padding:'14px 16px',border:'1px solid #e2e8f0',marginBottom:12}}>
-      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean}</p>
-      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>{(item.malzemeKodu||item.ean)||'-'} · {item.adet} adet</p>
+      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||'Ürün adı bulunamadı'}</p>
+      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>Malzeme: {item.malzemeKodu||'-'} · EAN: {item.ean||'-'} · {item.adet} adet</p>
       {!showPicker?(
         <div style={{display:'flex',gap:8}}>
           <input value={lok} onChange={e=>setLok(e.target.value.toUpperCase())}
