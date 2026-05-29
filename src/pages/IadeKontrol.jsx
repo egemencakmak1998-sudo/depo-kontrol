@@ -31,7 +31,8 @@ export default function IadeKontrol() {
   const streamRef   = useRef(null);
   const detectorRef = useRef(null);
   const rafRef      = useRef(null);
-  const lastBcRef   = useRef({ code:'', ts:0 });
+  const lastBcRef   = useRef({ code:'', emptySince:0 });
+  const noBarcodeFrameRef = useRef(0);
   const inputRef    = useRef(null);
   const itemsRef    = useRef(items);
   const prodsRef    = useRef(products);
@@ -84,6 +85,8 @@ export default function IadeKontrol() {
     if (rafRef.current){cancelAnimationFrame(rafRef.current);rafRef.current=null;}
     if (streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;}
     if (videoRef.current) videoRef.current.srcObject=null;
+    lastBcRef.current = { code:'', emptySince:0 };
+    noBarcodeFrameRef.current = 0;
     setCamOn(false);
   },[]);
 
@@ -98,7 +101,20 @@ export default function IadeKontrol() {
       setCamOn(true);
       const loop=async()=>{
         if(videoRef.current?.readyState>=2&&detectorRef.current){
-          try{const res=await detectorRef.current.detect(videoRef.current);if(res.length){const bc=res[0].rawValue,now=Date.now();if(bc!==lastBcRef.current.code||now-lastBcRef.current.ts>2000){lastBcRef.current={code:bc,ts:now};scanFnRef.current?.(bc);}}}catch{}
+          try{
+            const res=await detectorRef.current.detect(videoRef.current);
+            if(!res.length){
+              noBarcodeFrameRef.current += 1;
+              if(noBarcodeFrameRef.current >= 8) lastBcRef.current = { code:'', emptySince:Date.now() };
+            } else {
+              noBarcodeFrameRef.current = 0;
+              const bc=String(res[0].rawValue||'').trim();
+              if(bc && bc!==lastBcRef.current.code){
+                lastBcRef.current={code:bc,emptySince:0};
+                scanFnRef.current?.(bc);
+              }
+            }
+          }catch{}
         }
         rafRef.current=requestAnimationFrame(loop);
       };
