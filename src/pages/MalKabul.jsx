@@ -11,585 +11,397 @@ function Toast({ msg, type, onDone }) {
   return <div style={{position:'fixed',top:16,left:'50%',transform:'translateX(-50%)',background:bg[type]||'#334155',color:'#fff',padding:'10px 20px',borderRadius:16,fontSize:13,fontWeight:600,zIndex:9999,maxWidth:'90vw',textAlign:'center',boxShadow:'0 4px 16px rgba(0,0,0,.2)'}}>{msg}</div>;
 }
 
-const RAF_LIMITS = {
-  '109': { start: 13, end: 117 },
-  '110': { start: 14, end: 117 }
-};
-const getRafRange = (koridor) => RAF_LIMITS[koridor] || RAF_LIMITS['109'];
-const getRafList = (koridor) => {
-  const { start, end } = getRafRange(koridor);
-  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
-};
-const isValidRaf = (koridor, rafNo) => {
-  const { start, end } = getRafRange(koridor);
-  return rafNo >= start && rafNo <= end;
-};
+const RAF_LIMITS={'109':{start:13,end:117},'110':{start:14,end:117}};
+const getRafRange=k=>RAF_LIMITS[k]||RAF_LIMITS['109'];
+const getRafList=k=>{const{start,end}=getRafRange(k);return Array.from({length:end-start+1},(_,i)=>start+i);};
 
-/* ── LOKASYON SEÇİCİ ── */
-function LokPicker({ onSelect, currentLok }) {
-  const [search, setSearch] = useState('');
-  const [kor, setKor] = useState(currentLok ? currentLok.slice(1,4) : '109');
-  const [raf, setRaf] = useState(currentLok ? parseInt(currentLok.slice(5,8)) : null);
-  const [kat, setKat] = useState(currentLok ? currentLok.slice(8) : null);
-  const [camOn, setCamOn] = useState(false);
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
-  const detRef = useRef(null);
-  const rafAnimRef = useRef(null);
-
-  const KATS = ['A','B','C','D','E','F'];
-  const curLok = raf && kat ? `A${kor}S${String(raf).padStart(3,'0')}${kat}` : null;
-
-  const stopCam = () => {
-    if(rafAnimRef.current) cancelAnimationFrame(rafAnimRef.current);
-    if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
-    streamRef.current = null; setCamOn(false);
-  };
-
-  const scanLok = () => {
-    if(!videoRef.current||!detRef.current) return;
-    detRef.current.detect(videoRef.current).then(res=>{
-      if(res.length>0){
-        const code = res[0].rawValue.trim();
-        const m = code.match(/^A?(109|110)S?(\d{3})([A-F])$/i);
-        if(m){
-          const rafNo = parseInt(m[2]);
-          if(!isValidRaf(m[1], rafNo)) return;
-          setKor(m[1]); setRaf(rafNo); setKat(m[3].toUpperCase());
-          stopCam();
-        }
-      }
-      rafAnimRef.current = requestAnimationFrame(scanLok);
-    }).catch(()=>{ rafAnimRef.current = requestAnimationFrame(scanLok); });
-  };
-
-  const startCam = async () => {
-    try {
-      if(!detRef.current) detRef.current = new window.BarcodeDetector({formats:['code_128','code_39','qr_code','ean_13']});
-      const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-      streamRef.current = stream;
-      if(videoRef.current){videoRef.current.srcObject=stream;await videoRef.current.play();}
-      setCamOn(true);
-      rafAnimRef.current = requestAnimationFrame(scanLok);
-    } catch(e){ alert('Kamera açılamadı'); }
-  };
-
+function LokPicker({onSelect}){
+  const[kor,setKor]=useState('109');
+  const[raf,setRaf]=useState(null);
+  const[kat,setKat]=useState(null);
+  const[search,setSearch]=useState('');
+  const[camOn,setCamOn]=useState(false);
+  const videoRef=useRef(null);const streamRef=useRef(null);const detRef=useRef(null);const rafAnimRef=useRef(null);
+  const KATS=['A','B','C','D','E','F'];
+  const curLok=raf&&kat?`A${kor}S${String(raf).padStart(3,'0')}${kat}`:null;
+  const stopCam=()=>{if(rafAnimRef.current)cancelAnimationFrame(rafAnimRef.current);if(streamRef.current)streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;setCamOn(false);};
+  const scanLok=()=>{if(!videoRef.current||!detRef.current)return;detRef.current.detect(videoRef.current).then(res=>{if(res.length>0){const m=res[0].rawValue.trim().match(/^A?(109|110)S?(\d{3})([A-F])$/i);if(m){setKor(m[1]);setRaf(parseInt(m[2]));setKat(m[3].toUpperCase());stopCam();}}rafAnimRef.current=requestAnimationFrame(scanLok);}).catch(()=>{rafAnimRef.current=requestAnimationFrame(scanLok);});};
+  const startCam=async()=>{try{if(!detRef.current)detRef.current=new window.BarcodeDetector({formats:['code_128','code_39','qr_code','ean_13']});const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});streamRef.current=stream;if(videoRef.current){videoRef.current.srcObject=stream;await videoRef.current.play();}setCamOn(true);rafAnimRef.current=requestAnimationFrame(scanLok);}catch{alert('Kamera açılamadı');}};
   useEffect(()=>()=>stopCam(),[]);
-
-  const navigate = (dir) => {
-    if(!raf||!kat) return;
-    const katIdx = KATS.indexOf(kat);
-    if(dir==='up' && katIdx<KATS.length-1){ setKat(KATS[katIdx+1]); }
-    else if(dir==='down' && katIdx>0){ setKat(KATS[katIdx-1]); }
-    else if(dir==='right' && raf<getRafRange(kor).end){ setRaf(raf+1); }
-    else if(dir==='left' && raf>getRafRange(kor).start){ setRaf(raf-1); }
-  };
-
-  const handleSearch = (val) => {
-    setSearch(val);
-    const m = val.trim().match(/^A?(109|110)S?(\d{2,3})([A-F])$/i);
-    if(m){
-      const rafNo = parseInt(m[2]);
-      if(isValidRaf(m[1], rafNo)){ setKor(m[1]); setRaf(rafNo); setKat(m[3].toUpperCase()); }
-    }
-  };
-
-  return (
+  const handleSearch=val=>{setSearch(val);const m=val.trim().match(/^A?(109|110)S?(\d{2,3})([A-F])$/i);if(m){{setKor(m[1]);setRaf(parseInt(m[2]));setKat(m[3].toUpperCase());}}};
+  return(
     <div style={{padding:14}}>
-      {/* Arama + Barkod */}
-      <div style={{display:'flex',gap:8,marginBottom:14}}>
-        <input value={search} onChange={e=>handleSearch(e.target.value)}
-          placeholder="Kod yaz (örn: A109S013B)"
-          style={{flex:1,padding:'9px 12px',border:'1px solid #e2e8f0',borderRadius:10,fontSize:13,outline:'none'}} />
-        <button onClick={()=>camOn?stopCam():startCam()}
-          style={{background:camOn?'#ef4444':'#1e40af',border:'none',borderRadius:10,color:'#fff',padding:'9px 14px',fontSize:13,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>
-          {camOn?'⏹ Durdur':'📷 Tara'}
-        </button>
+      <div style={{display:'flex',gap:8,marginBottom:12}}>
+        <input value={search} onChange={e=>handleSearch(e.target.value)} placeholder="Kod yaz (A109S013B)" style={{flex:1,padding:'9px 12px',border:'1px solid #e2e8f0',borderRadius:10,fontSize:13,outline:'none'}}/>
+        <button onClick={()=>camOn?stopCam():startCam()} style={{background:camOn?'#ef4444':'#1e40af',border:'none',borderRadius:10,color:'#fff',padding:'9px 14px',fontSize:13,fontWeight:600,cursor:'pointer'}}>{camOn?'⏹':'📷 Tara'}</button>
       </div>
-
-      {camOn&&(
-        <div style={{marginBottom:12,borderRadius:10,overflow:'hidden',background:'#000',maxHeight:180}}>
-          <video ref={videoRef} style={{width:'100%',maxHeight:180,objectFit:'cover'}} playsInline muted />
-        </div>
-      )}
-
-      {/* Navigasyon — sadece lokasyon seçiliyse */}
-      {curLok&&(
-        <div style={{background:'#eff6ff',borderRadius:10,padding:'10px 12px',marginBottom:14}}>
-          <p style={{fontSize:11,color:'#1d4ed8',marginBottom:8,fontWeight:600}}>HIZ NAVİGASYONU</p>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
-            {[['left','← Sol Raf'],['right','Sağ Raf →'],['down','↓ Alt Kat'],['up','↑ Üst Kat']].map(([d,l])=>(
-              <button key={d} onClick={()=>navigate(d)}
-                style={{background:'#fff',border:'1px solid #bfdbfe',borderRadius:8,padding:'7px 0',fontSize:12,fontWeight:600,cursor:'pointer',color:'#1e40af'}}>
-                {l}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Koridor */}
+      {camOn&&<div style={{marginBottom:10,borderRadius:10,overflow:'hidden',background:'#000',maxHeight:160}}><video ref={videoRef} style={{width:'100%',maxHeight:160,objectFit:'cover'}} playsInline muted/></div>}
       <p style={{fontSize:11,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>Koridor</p>
-      <div style={{display:'flex',gap:8,marginBottom:14}}>
-        {['109','110'].map(k=>(
-          <button key={k} onClick={()=>{setKor(k);setRaf(null);setKat(null);}}
-            style={{flex:1,border:'none',borderRadius:10,padding:'10px 0',fontSize:14,fontWeight:600,cursor:'pointer',
-              background:kor===k?'#1e40af':'#f1f5f9',color:kor===k?'#fff':'#475569'}}>
-            {k}
-          </button>
-        ))}
+      <div style={{display:'flex',gap:8,marginBottom:12}}>
+        {['109','110'].map(k=><button key={k} onClick={()=>{setKor(k);setRaf(null);setKat(null);}} style={{flex:1,border:'none',borderRadius:10,padding:'9px 0',fontSize:14,fontWeight:600,cursor:'pointer',background:kor===k?'#1e40af':'#f1f5f9',color:kor===k?'#fff':'#475569'}}>{k}</button>)}
       </div>
-
-      {/* Raf */}
-      <p style={{fontSize:11,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>
-        Raf {raf?`— ${raf}`:`(${getRafRange(kor).start}-${getRafRange(kor).end})`}
-      </p>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(8,1fr)',gap:4,maxHeight:160,overflowY:'auto',marginBottom:14}}>
-        {getRafList(kor).map(n=>(
-          <button key={n} onClick={()=>{setRaf(n);setKat(null);}}
-            style={{padding:'6px 0',border:'none',borderRadius:6,fontSize:11,fontWeight:600,cursor:'pointer',
-              background:raf===n?'#1e40af':'#f1f5f9',color:raf===n?'#fff':'#475569'}}>
-            {n}
-          </button>
-        ))}
+      <p style={{fontSize:11,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>Raf {raf?`— ${raf}`:''}</p>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(8,1fr)',gap:4,maxHeight:140,overflowY:'auto',marginBottom:12}}>
+        {getRafList(kor).map(n=><button key={n} onClick={()=>{setRaf(n);setKat(null);}} style={{padding:'5px 0',border:'none',borderRadius:5,fontSize:11,fontWeight:600,cursor:'pointer',background:raf===n?'#1e40af':'#f1f5f9',color:raf===n?'#fff':'#475569'}}>{n}</button>)}
       </div>
-
-      {/* Kat */}
-      {raf&&(
-        <>
-          <p style={{fontSize:11,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>Kat</p>
-          <div style={{display:'flex',gap:8,marginBottom:14}}>
-            {KATS.map(k=>(
-              <button key={k} onClick={()=>setKat(k)}
-                style={{flex:1,border:'none',borderRadius:8,padding:'10px 0',fontSize:14,fontWeight:600,cursor:'pointer',
-                  background:kat===k?'#1e40af':'#f1f5f9',color:kat===k?'#fff':'#475569'}}>
-                {k}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-
-      {/* Seçilen + Onayla */}
-      {curLok&&(
-        <button onClick={()=>onSelect(curLok)}
-          style={{width:'100%',background:'#1e40af',border:'none',borderRadius:12,padding:'13px 0',fontSize:15,fontWeight:700,cursor:'pointer',color:'#fff'}}>
-          📍 {curLok} — Sayıma Başla →
-        </button>
-      )}
+      {raf&&<><p style={{fontSize:11,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>Kat</p><div style={{display:'flex',gap:6,marginBottom:12}}>{KATS.map(k=><button key={k} onClick={()=>setKat(k)} style={{flex:1,border:'none',borderRadius:8,padding:'9px 0',fontSize:14,fontWeight:600,cursor:'pointer',background:kat===k?'#1e40af':'#f1f5f9',color:kat===k?'#fff':'#475569'}}>{k}</button>)}</div></>}
+      {curLok&&<button onClick={()=>onSelect(curLok)} style={{width:'100%',background:'#1e40af',border:'none',borderRadius:12,padding:'12px 0',fontSize:14,fontWeight:700,cursor:'pointer',color:'#fff'}}>📍 {curLok} — Seç →</button>}
     </div>
   );
 }
 
-/* ── SAYIM EKRANI ── */
-function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBack, requireKnownProduct = false, referenceItems = [] }) {
+/* ── MAL KABUL SAYIM OTURUMU (ScanSession benzeri) ── */
+function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onBack }) {
   const { user, profile } = useAuth();
-  const [entries, setEntries] = useState({});
-  const [hasarlilar, setHasarlilar] = useState({});
-  const [barInput, setBarInput] = useState('');
+  const isRef = referenceItems && referenceItems.length > 0;
+
+  // items = referans listesi veya boş
+  const items = isRef ? referenceItems.map((r,i)=>({
+    id:`r${i}`,
+    ean: String(r.ean||'').trim(),
+    malzemeKodu: String(r.malzemeKodu||'').trim(),
+    urunAdi: r.urunAdi || products[String(r.ean||'').trim()]?.urunAdi || products[String(r.malzemeKodu||'').trim()]?.urunAdi || r.malzemeKodu || '',
+    beklenen: r.beklenenAdet || 0,
+  })) : [];
+
+  const [counts, setCounts] = useState({});
+  const [scanHistory, setScanHistory] = useState([]);
+  const [lastScan, setLastScan] = useState(null);
   const [mode, setMode] = useState('text');
+  const [barInput, setBarInput] = useState('');
   const [camOn, setCamOn] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [showHasar, setShowHasar] = useState(false);
+  const [filter, setFilter] = useState('all');
   const [toast, setToast] = useState(null);
-  const toast$ = (msg,type='info') => setToast({msg,type,id:Date.now()});
+  const [hasarlilar, setHasarlilar] = useState({});
+  const [showHasar, setShowHasar] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const detRef = useRef(null);
   const rafRef = useRef(null);
   const lastBcRef = useRef({code:'',ts:0});
-  const entriesRef = useRef(entries);
-  useEffect(()=>{entriesRef.current=entries;},[entries]);
+  const lockedBcRef = useRef('');
+  const noBcFrameRef = useRef(0);
+  const inputRef = useRef(null);
+  const scanFnRef = useRef(null);
+  const toast$ = useCallback((msg,type='info')=>setToast({msg,type,id:Date.now()}),[]);
+
+  // Ürün kodundan item bul (ean veya malzemeKodu)
+  const findItem = useCallback((code) => {
+    const c = String(code||'').trim();
+    if(!c) return null;
+    if(isRef) return items.find(i=>i.ean===c||i.malzemeKodu===c)||null;
+    // Manuel: products koleksiyonundan bak
+    return products[c]||null;
+  },[items, isRef, products]);
+
+  const getKey = (item) => item?.ean || item?.malzemeKodu || '';
+
+  const processScan = useCallback((code) => {
+    const c = String(code||'').trim(); if(!c) return;
+    const item = findItem(c);
+    if(!item){ toast$(`Bilinmeyen: ${c}`,'error'); setLastScan({code:c,found:false}); return; }
+    const key = getKey(item);
+    setCounts(prev=>{
+      const prevN = prev[key]||0;
+      const n = prevN+1;
+      setScanHistory(h=>[...h,{key,code:c,item,previousCount:prevN}]);
+      if(isRef){
+        if(n>item.beklenen) toast$(`🔴 FAZLA: ${item.urunAdi} ${n}/${item.beklenen}`,'error');
+        else if(n===item.beklenen) toast$(`🟢 TAMAM: ${item.urunAdi}`,'success');
+        else toast$(`🟡 ${item.urunAdi}: ${n}/${item.beklenen}`,'info');
+      } else { toast$(item.urunAdi||c,'success'); }
+      setLastScan({code:c,found:true,item,n,expected:item.beklenen});
+      return {...prev,[key]:n};
+    });
+  },[findItem, isRef, toast$]);
+
+  useEffect(()=>{scanFnRef.current=processScan;},[processScan]);
+
+  const undoLast = useCallback(()=>{
+    setScanHistory(prev=>{
+      if(!prev.length){toast$('Geri alınacak yok','warning');return prev;}
+      const last=prev[prev.length-1];
+      setCounts(c=>({...c,[last.key]:Math.max(0,(c[last.key]||0)-1)}));
+      toast$(`↩️ Geri: ${last.item?.urunAdi||last.code}`,'info');
+      return prev.slice(0,-1);
+    });
+  },[toast$]);
 
   const stopCam = useCallback(()=>{
-    if(rafRef.current) cancelAnimationFrame(rafRef.current);
-    if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
-    streamRef.current=null; setCamOn(false);
+    if(rafRef.current){cancelAnimationFrame(rafRef.current);rafRef.current=null;}
+    if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;}
+    if(videoRef.current) videoRef.current.srcObject=null;
+    lockedBcRef.current=''; noBcFrameRef.current=0; setCamOn(false);
   },[]);
 
-  const getProductByCode = useCallback((code)=>{
-    const key = String(code || '').trim();
-    if(!key) return null;
-    return products[key] || null;
-  },[products]);
-
-  const getRefKeys = useCallback((ref)=>{
-    const keys = new Set();
-    const ean = String(ref?.ean || '').trim();
-    const malzemeKodu = String(ref?.malzemeKodu || '').trim();
-    if(ean) keys.add(ean);
-    if(malzemeKodu) keys.add(malzemeKodu);
-    const p = products[ean] || products[malzemeKodu];
-    if(p?.ean) keys.add(String(p.ean).trim());
-    if(p?.malzemeKodu) keys.add(String(p.malzemeKodu).trim());
-    return keys;
-  },[products]);
-
-  const referenceKeySet = new Set();
-  (referenceItems || []).forEach(ref=>{
-    getRefKeys(ref).forEach(k=>referenceKeySet.add(k));
-  });
-
-  const getEntryCountForRef = (ref) => {
-    let total = 0;
-    getRefKeys(ref).forEach(k=>{ total += entries[k] || 0; });
-    return total;
-  };
-
-  const addProductCode = useCallback((code)=>{
-    const rawCode = String(code || '').trim();
-    if(!rawCode) return false;
-
-    const product = getProductByCode(rawCode);
-    if(requireKnownProduct && !product){
-      toast$(`Ürün havuzunda bulunamadı: ${rawCode}`,'error');
-      return false;
-    }
-
-    if(requireKnownProduct && referenceItems.length > 0){
-      const possibleKeys = [rawCode, product?.ean, product?.malzemeKodu].filter(Boolean).map(k=>String(k).trim());
-      const inReference = possibleKeys.some(k=>referenceKeySet.has(k));
-      if(!inReference){
-        toast$(`Bu ürün referans dosyasında yok: ${rawCode}`,'error');
-        return false;
-      }
-    }
-
-    const key = product?.ean || product?.malzemeKodu || rawCode;
-    setEntries(prev=>({...prev,[key]:(prev[key]||0)+1}));
-    toast$(product?.urunAdi || rawCode,'success');
-    return true;
-  },[getProductByCode, requireKnownProduct, referenceItems, referenceKeySet]);
-
-  const scan = useCallback(()=>{
-    if(!videoRef.current||!detRef.current) return;
-    detRef.current.detect(videoRef.current).then(res=>{
-      if(res.length>0){
-        const code=res[0].rawValue; const now=Date.now();
-        if(code!==lastBcRef.current.code||now-lastBcRef.current.ts>2000){
-          lastBcRef.current={code,ts:now};
-          addProductCode(code);
-        }
-      }
-      rafRef.current=requestAnimationFrame(scan);
-    }).catch(()=>{rafRef.current=requestAnimationFrame(scan);});
-  },[addProductCode]);
-
   const startCam = useCallback(async()=>{
+    if(streamRef.current) return;
+    if(!('BarcodeDetector' in window)){toast$('Kamera desteklenmiyor','warning');setMode('text');return;}
     try{
-      if(!('BarcodeDetector' in window)){toast$('Kamera desteklenmiyor','error');return;}
-      if(!detRef.current) detRef.current=new window.BarcodeDetector({formats:['ean_13','ean_8','code_128','code_39','qr_code']});
-      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}});
       streamRef.current=stream;
       if(videoRef.current){videoRef.current.srcObject=stream;await videoRef.current.play();}
-      setCamOn(true); rafRef.current=requestAnimationFrame(scan);
-    }catch(e){toast$('Kamera hatası','error');}
-  },[scan]);
+      detRef.current=new BarcodeDetector({formats:['ean_13','ean_8','code_128','code_39','upc_a']});
+      setCamOn(true);
+      const loop=async()=>{
+        if(videoRef.current?.readyState>=2&&detRef.current){
+          try{
+            const res=await detRef.current.detect(videoRef.current);
+            if(!res.length){noBcFrameRef.current++;if(noBcFrameRef.current>=8)lockedBcRef.current='';}
+            else{noBcFrameRef.current=0;const bc=String(res[0].rawValue||'').trim();if(bc&&bc!==lockedBcRef.current){lockedBcRef.current=bc;scanFnRef.current?.(bc);}}
+          }catch{}
+        }
+        rafRef.current=requestAnimationFrame(loop);
+      };
+      rafRef.current=requestAnimationFrame(loop);
+    }catch(e){toast$('Kamera açılamadı: '+e.message,'error');setMode('text');}
+  },[toast$]);
 
+  useEffect(()=>{
+    if(mode==='camera'){startCam();return()=>stopCam();}
+    stopCam();setTimeout(()=>inputRef.current?.focus(),150);
+  },[mode,startCam,stopCam]);
   useEffect(()=>()=>stopCam(),[stopCam]);
 
-  const handleText = (e) => {
-    if(e.key!=='Enter') return;
-    const code=barInput.trim(); if(!code) return;
-    const added = addProductCode(code);
-    if(added) setBarInput('');
+  const setManualCount = useCallback((item,val)=>{
+    const key=getKey(item);
+    const n=Math.max(0,parseInt(String(val).replace(/\D/g,''),10)||0);
+    setCounts(prev=>({...prev,[key]:n}));
+    setLastScan({code:key,found:true,item,n,expected:item.beklenen});
+  },[]);
+
+  const getStatus = useCallback((item)=>{
+    const key=getKey(item);
+    const c=counts[key]||0;
+    if(!isRef) return c>0?'ok':'pending';
+    if(c===0) return 'pending';
+    if(c===item.beklenen) return 'ok';
+    if(c<item.beklenen) return 'partial';
+    return 'excess';
+  },[counts,isRef]);
+
+  // Manuel mode: free scan — products not in referenceItems
+  const freeItems = !isRef ? Object.entries(counts).filter(([,v])=>v>0).map(([key,adet])=>{
+    const p=products[key]||{};
+    return {id:key,ean:p.ean||key,malzemeKodu:p.malzemeKodu||'',urunAdi:p.urunAdi||key,beklenen:0,_adet:adet};
+  }) : [];
+
+  const displayItems = isRef ? items : freeItems;
+
+  const stats = isRef ? items.reduce((a,item)=>{a[getStatus(item)]++;return a;},{pending:0,ok:0,partial:0,excess:0}) : {ok:freeItems.length,pending:0,partial:0,excess:0};
+  const totalScanned = isRef ? items.reduce((a,i)=>a+(counts[getKey(i)]||0),0) : freeItems.reduce((a,i)=>a+i._adet,0);
+  const totalExpected = isRef ? items.reduce((a,i)=>a+i.beklenen,0) : 0;
+  const progress = isRef&&totalExpected ? Math.min(100,Math.floor((totalScanned/totalExpected)*100)) : 0;
+  const visible = filter==='all' ? displayItems : displayItems.filter(i=>getStatus(i)===filter);
+
+  const ST={
+    pending:{dot:'#94a3b8',cnt:'#94a3b8',card:'#fff',border:'#e2e8f0'},
+    ok:{dot:'#10b981',cnt:'#10b981',card:'#f0fdf4',border:'#86efac'},
+    partial:{dot:'#f59e0b',cnt:'#d97706',card:'#fffbeb',border:'#fde68a'},
+    excess:{dot:'#ef4444',cnt:'#dc2626',card:'#fef2f2',border:'#fecaca'},
   };
 
-  const handleSubmit = async () => {
-    if(Object.keys(entries).length===0){toast$('Hiç ürün girilmedi','error');return;}
+  const handleDone = async () => {
+    const totalEntries = isRef ? totalScanned : freeItems.reduce((a,i)=>a+i._adet,0);
+    if(totalEntries===0){toast$('Hiç ürün girilmedi','error');return;}
     setSaving(true);
-    try {
-      const items = Object.entries(entries).map(([key,adet])=>{
-        const product = products[key] || {};
-        return {
-          ean: product.ean || key,
-          adet,
-          urunAdi: product.urunAdi || '',
-          malzemeKodu: product.malzemeKodu || '',
-          hasarliAdet: hasarlilar[key] || 0,
-        };
+    try{
+      const itemsToSave = isRef
+        ? items.map(item=>{const key=getKey(item);return{ean:item.ean,malzemeKodu:item.malzemeKodu,urunAdi:item.urunAdi,adet:counts[key]||0,beklenenAdet:item.beklenen,hasarliAdet:hasarlilar[key]||0};})
+        : freeItems.map(item=>({ean:item.ean,malzemeKodu:item.malzemeKodu,urunAdi:item.urunAdi,adet:item._adet,beklenenAdet:0,hasarliAdet:hasarlilar[item.id]||0}));
+      const ref=await addDoc(collection(db,'countEntries'),{
+        sessionId,lokasyon:'MAL_KABUL',tip:'mal_kabul',
+        kullanici:profile?.name||user?.email||'',kullaniciId:user?.uid||'',
+        items:itemsToSave,tarih:Timestamp.now(),durum:'bekliyor',
+        hasarliOzet:itemsToSave.filter(i=>i.hasarliAdet>0).map(i=>({ean:i.ean,adet:i.hasarliAdet,urunAdi:i.urunAdi})),
       });
-      const ref = await addDoc(collection(db,'countEntries'),{
-        sessionId, lokasyon, tip:sessionTip,
-        kullanici:profile?.name||user?.email||'',
-        kullaniciId:user?.uid||'',
-        items, tarih:Timestamp.now(), durum:'bekliyor',
-        hasarliOzet:Object.entries(hasarlilar).map(([key,adet])=>({
-          ean: products[key]?.ean || key,
-          adet,
-          urunAdi: products[key]?.urunAdi || ''
-        })).filter(h=>h.adet>0),
-      });
-      onSubmit(ref.id, items);
+      onDone(ref.id, itemsToSave);
     }catch(e){toast$('Hata: '+e.message,'error');}
     setSaving(false);
   };
 
-  const itemList = Object.entries(entries).filter(([,v])=>v>0);
-  const toplamAdet = itemList.reduce((a,[,v])=>a+v,0);
-  const toplamHasar = Object.values(hasarlilar).reduce((a,b)=>a+b,0);
-
-  return (
-    <div>
-      <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
-        <button onClick={onBack} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
+  return(
+    <div style={{height:'100dvh',display:'flex',flexDirection:'column',background:'#f1f5f9',overflow:'hidden'}}>
+      {/* Top bar */}
+      <div style={{background:'#0f172a',padding:'10px 14px',display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
+        <button onClick={onBack} style={{background:'rgba(255,255,255,.08)',border:'none',color:'#94a3b8',width:34,height:34,borderRadius:10,cursor:'pointer',fontSize:16,display:'flex',alignItems:'center',justifyContent:'center'}}>←</button>
         <div style={{flex:1}}>
-          <p style={{color:'#fff',fontWeight:700,fontSize:14}}>📍 {lokasyon}</p>
-          <p style={{color:'#94a3b8',fontSize:11}}>{itemList.length} kalem · {toplamAdet} adet{toplamHasar>0?` · ⚠️ ${toplamHasar} hasarlı`:''}</p>
+          {isRef ? (
+            <>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                <span style={{color:'#e2e8f0',fontSize:12,fontWeight:600}}>{items.length} kalem · {totalScanned}/{totalExpected} adet</span>
+                <span style={{color:progress===100?'#10b981':'#94a3b8',fontSize:12,fontWeight:700,fontFamily:'monospace'}}>%{progress}</span>
+              </div>
+              <div style={{height:5,background:'rgba(255,255,255,.1)',borderRadius:4,overflow:'hidden'}}>
+                <div style={{height:'100%',borderRadius:4,transition:'width .35s',background:progress===100?'#10b981':'linear-gradient(90deg,#3b82f6,#6366f1)',width:`${progress}%`}}/>
+              </div>
+            </>
+          ) : (
+            <span style={{color:'#e2e8f0',fontSize:13,fontWeight:600}}>📥 Manuel Mal Kabul · {freeItems.reduce((a,i)=>a+i._adet,0)} adet tarandı</span>
+          )}
         </div>
-        <button onClick={handleSubmit} disabled={saving}
-          style={{background:'#10b981',border:'none',borderRadius:10,color:'#fff',padding:'8px 14px',fontWeight:700,fontSize:13,cursor:'pointer',opacity:saving?.6:1}}>
-          {saving?'...':'Kaydet ✓'}
+        <button onClick={undoLast} disabled={!scanHistory.length} style={{background:scanHistory.length?'#f59e0b':'#cbd5e1',border:'none',color:'#fff',padding:'8px 10px',borderRadius:10,fontWeight:700,fontSize:12,cursor:scanHistory.length?'pointer':'not-allowed',flexShrink:0}}>↩️</button>
+        <button onClick={handleDone} disabled={saving} style={{background:'linear-gradient(135deg,#10b981,#059669)',border:'none',color:'#fff',padding:'8px 12px',borderRadius:10,fontWeight:700,fontSize:12,cursor:'pointer',flexShrink:0,opacity:saving?.6:1}}>
+          {saving?'...':'Tamamla'}
         </button>
       </div>
 
-      <div style={{display:'flex',borderBottom:'1px solid #e2e8f0'}}>
-        {[['text','⌨️ Metin'],['cam','📷 Kamera']].map(([m,l])=>(
-          <button key={m} onClick={()=>{if(m==='cam'&&!camOn)startCam();if(m!=='cam')stopCam();setMode(m);}}
-            style={{flex:1,border:'none',padding:'11px',fontSize:13,fontWeight:600,cursor:'pointer',
-              background:mode===m?'#0f172a':'#f8fafc',color:mode===m?'#fff':'#64748b'}}>
-            {l}
-          </button>
+      {/* Filtreler */}
+      {isRef && (
+        <div style={{background:'#fff',borderBottom:'1px solid #e2e8f0',padding:'7px 10px',display:'flex',gap:5,overflowX:'auto',flexShrink:0}}>
+          {[
+            {key:'all',lbl:`Tümü ${items.length}`,bg:'#f1f5f9',clr:'#334155'},
+            {key:'ok',lbl:`✅ ${stats.ok}`,bg:'#dcfce7',clr:'#166534'},
+            {key:'partial',lbl:`⚠️ ${stats.partial}`,bg:'#fef3c7',clr:'#92400e'},
+            {key:'excess',lbl:`❌ ${stats.excess}`,bg:'#fee2e2',clr:'#991b1b'},
+            {key:'pending',lbl:`⬜ ${stats.pending}`,bg:'#f1f5f9',clr:'#64748b'},
+          ].map(({key,lbl,bg,clr})=>(
+            <button key={key} onClick={()=>setFilter(key)} style={{background:bg,color:clr,border:`2px solid ${filter===key?'#3b82f6':'transparent'}`,padding:'4px 9px',borderRadius:8,fontSize:11,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap',flexShrink:0}}>{lbl}</button>
+          ))}
+        </div>
+      )}
+
+      {/* Hasarlı toggle */}
+      <div style={{display:'flex',borderBottom:'1px solid #f1f5f9',flexShrink:0}}>
+        {[['camera','📷 Kamera'],['text','⌨️ Metin']].map(([id,lbl])=>(
+          <button key={id} onClick={()=>setMode(id)} style={{flex:1,padding:'10px 0',fontSize:13,fontWeight:600,border:'none',cursor:'pointer',background:mode===id?'#0f172a':'#fff',color:mode===id?'#fff':'#64748b'}}>{lbl}</button>
         ))}
-        <button onClick={()=>setShowHasar(!showHasar)}
-          style={{border:'none',padding:'11px 14px',fontSize:13,fontWeight:600,cursor:'pointer',
-            background:showHasar?'#fef3c7':'#f8fafc',color:showHasar?'#d97706':'#64748b'}}>
-          ⚠️ Hasarlı{toplamHasar>0?` (${toplamHasar})`:''}
+        <button onClick={()=>setShowHasar(!showHasar)} style={{border:'none',padding:'10px 14px',fontSize:13,fontWeight:600,cursor:'pointer',background:showHasar?'#fef3c7':'#fff',color:showHasar?'#d97706':'#64748b',flexShrink:0}}>
+          ⚠️{Object.values(hasarlilar).reduce((a,b)=>a+b,0)>0?` (${Object.values(hasarlilar).reduce((a,b)=>a+b,0)})`:''}
         </button>
       </div>
 
-      {mode==='cam'&&(
-        <div style={{background:'#000',maxHeight:220,overflow:'hidden'}}>
-          <video ref={videoRef} style={{width:'100%',maxHeight:220,objectFit:'cover'}} playsInline muted />
-          {!camOn&&<div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
-            <button onClick={startCam} style={{background:'#3b82f6',border:'none',color:'#fff',borderRadius:10,padding:'10px 20px',cursor:'pointer'}}>Kamerayı Başlat</button>
-          </div>}
+      {/* Kamera */}
+      {mode==='camera'&&(
+        <div style={{position:'relative',background:'#000',height:150,flexShrink:0}}>
+          <video ref={videoRef} style={{width:'100%',height:'100%',objectFit:'cover'}} playsInline muted/>
+          {!camOn&&<div style={{position:'absolute',inset:0,background:'rgba(0,0,0,.7)',display:'flex',alignItems:'center',justifyContent:'center'}}><p style={{color:'rgba(255,255,255,.5)',fontSize:13}}>📷 Kamera başlatılıyor...</p></div>}
+          {camOn&&<div style={{position:'absolute',bottom:6,right:8,background:'rgba(16,185,129,.9)',color:'#fff',fontSize:10,fontWeight:700,padding:'3px 8px',borderRadius:6}}>● CANLI</div>}
         </div>
       )}
 
+      {/* Metin input */}
       {mode==='text'&&(
-        <div style={{padding:'12px 16px'}}>
-          <div style={{display:'flex',gap:8}}>
-            <input value={barInput} onChange={e=>setBarInput(e.target.value)} onKeyDown={handleText}
+        <div style={{background:'#fff',padding:'10px',flexShrink:0}}>
+          <div style={{display:'flex',gap:7}}>
+            <input ref={inputRef} value={barInput} onChange={e=>setBarInput(e.target.value)}
+              onKeyDown={e=>{if(e.key==='Enter'&&barInput.trim()){processScan(barInput);setBarInput('');}}}
               placeholder="Barkod okutun → Enter" autoFocus
-              style={{flex:1,padding:'10px 14px',borderRadius:10,border:'1px solid #e2e8f0',fontSize:14,outline:'none'}} />
-            <button onClick={()=>handleText({key:'Enter'})} style={{background:'#1e40af',border:'none',borderRadius:10,color:'#fff',padding:'10px 16px',fontWeight:700,cursor:'pointer'}}>Tara</button>
+              style={{flex:1,border:'2px solid #e2e8f0',borderRadius:10,padding:'10px 12px',fontSize:14,background:'#f8fafc',fontFamily:'monospace',outline:'none'}}
+              onFocus={e=>e.target.style.borderColor='#3b82f6'} onBlur={e=>e.target.style.borderColor='#e2e8f0'}/>
+            <button onClick={()=>{if(barInput.trim()){processScan(barInput);setBarInput('');inputRef.current?.focus();}}} style={{background:'linear-gradient(135deg,#3b82f6,#6366f1)',color:'#fff',border:'none',padding:'0 16px',borderRadius:10,fontWeight:700,cursor:'pointer'}}>Tara</button>
           </div>
         </div>
       )}
 
-      <div style={{padding:'0 16px 80px'}}>
-        {referenceItems.length>0&&(
-          <div style={{background:'#fff',border:'1px solid #e2e8f0',borderRadius:12,marginBottom:12,overflow:'hidden'}}>
-            <div style={{display:'flex',alignItems:'center',gap:8,padding:'10px 12px',background:'#f8fafc',borderBottom:'1px solid #e2e8f0'}}>
-              <p style={{fontSize:13,fontWeight:800,color:'#1e293b',flex:1}}>📋 Referans Listesi</p>
-              <p style={{fontSize:11,color:'#64748b',fontWeight:600}}>
-                {referenceItems.filter(r=>getEntryCountForRef(r)===(r.beklenenAdet||0)).length} / {referenceItems.length} tamam
-              </p>
-            </div>
-            <div style={{maxHeight:360,overflowY:'auto'}}>
-              {referenceItems.map((ref,i)=>{
-                const sayilan = getEntryCountForRef(ref);
-                const beklenen = ref.beklenenAdet || 0;
-                const p = products[String(ref.ean || '').trim()] || products[String(ref.malzemeKodu || '').trim()] || {};
-                const urunAdi = ref.urunAdi || p.urunAdi || ref.malzemeKodu || ref.ean || '-';
-                const kod = ref.malzemeKodu || p.malzemeKodu || ref.ean || p.ean || '-';
-                const durum = sayilan === beklenen ? 'tamam' : sayilan > beklenen ? 'fazla' : sayilan > 0 ? 'eksik' : 'bekliyor';
-                const renk = durum === 'tamam' ? '#10b981' : durum === 'fazla' ? '#ef4444' : durum === 'eksik' ? '#f59e0b' : '#94a3b8';
-                const bg = durum === 'tamam' ? '#f0fdf4' : durum === 'fazla' ? '#fef2f2' : durum === 'eksik' ? '#fffbeb' : '#fff';
-                return (
-                  <div key={`${kod}-${i}`} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 12px',borderBottom:'1px solid #f1f5f9',background:bg}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <p style={{fontSize:12,fontWeight:700,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{urunAdi}</p>
-                      <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{kod}{ref.ean?` · ${ref.ean}`:''}</p>
-                    </div>
-                    <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
-                      <span style={{fontSize:12,fontWeight:800,color:renk}}>{sayilan}</span>
-                      <span style={{fontSize:11,color:'#94a3b8'}}> / {beklenen}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+      {/* Last scan feedback */}
+      {lastScan&&(
+        <div style={{margin:'0 10px 0',flexShrink:0,background:!lastScan.found?'#fef2f2':lastScan.n>lastScan.expected?'#fef2f2':lastScan.n===lastScan.expected?'#f0fdf4':'#fffbeb',border:`1px solid ${!lastScan.found?'#fecaca':lastScan.n>lastScan.expected?'#fecaca':lastScan.n===lastScan.expected?'#86efac':'#fde68a'}`,borderRadius:12,padding:'8px 12px',display:'flex',alignItems:'center',gap:10}}>
+          <span style={{fontSize:18,flexShrink:0}}>{!lastScan.found?'❓':lastScan.n>lastScan.expected?'🔴':lastScan.n===lastScan.expected?'🟢':'🟡'}</span>
+          <div style={{flex:1,minWidth:0}}>
+            <p style={{fontSize:13,fontWeight:700,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{lastScan.item?.urunAdi||lastScan.code}</p>
+            {lastScan.found&&<p style={{fontSize:10,color:'#64748b',fontFamily:'monospace'}}>{lastScan.code}</p>}
           </div>
-        )}
+          {lastScan.found&&isRef&&<span style={{fontSize:17,fontWeight:800,fontFamily:'monospace',color:lastScan.n>lastScan.expected?'#dc2626':lastScan.n===lastScan.expected?'#16a34a':'#d97706'}}>{lastScan.n}/{lastScan.expected}</span>}
+        </div>
+      )}
 
-        {showHasar&&itemList.length>0&&(
+      {/* Ürün listesi */}
+      <div style={{flex:1,overflowY:'auto',padding:'8px 10px 20px'}}>
+        {/* Hasarlı panel */}
+        {showHasar&&displayItems.length>0&&(
           <div style={{background:'#fef3c7',borderRadius:10,padding:'10px 12px',marginBottom:10,border:'1px solid #fde68a'}}>
-            <p style={{fontSize:12,fontWeight:700,color:'#92400e',marginBottom:8}}>⚠️ Hasarlı Ürün Girişi</p>
-            {itemList.map(([ean,adet])=>{
-              const p=products[ean]||{};
-              return (
-                <div key={ean} style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
-                  <p style={{flex:1,fontSize:12,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.urunAdi||ean}</p>
-                  <input type="number" min="0" max={adet}
-                    value={hasarlilar[ean]||0}
-                    onChange={e=>setHasarlilar(prev=>({...prev,[ean]:Math.min(adet,Math.max(0,parseInt(e.target.value)||0))}))}
-                    style={{width:52,textAlign:'center',border:'1px solid #fde68a',borderRadius:7,padding:'4px',fontSize:13,fontWeight:700,background:'#fff'}} />
-                  <span style={{fontSize:11,color:'#92400e'}}>/ {adet}</span>
-                </div>
-              );
+            <p style={{fontSize:12,fontWeight:700,color:'#92400e',marginBottom:8}}>⚠️ Hasarlı Adet Girişi</p>
+            {displayItems.filter(i=>(counts[getKey(i)]||i._adet||0)>0).map((item,idx)=>{
+              const key=getKey(item); const sayilan=counts[key]||item._adet||0;
+              return(<div key={idx} style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                <p style={{flex:1,fontSize:12,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi}</p>
+                <input type="number" min="0" max={sayilan} value={hasarlilar[key]||0}
+                  onChange={e=>setHasarlilar(prev=>({...prev,[key]:Math.min(sayilan,Math.max(0,parseInt(e.target.value)||0))}))}
+                  style={{width:52,textAlign:'center',border:'1px solid #fde68a',borderRadius:7,padding:'4px',fontSize:13,fontWeight:700,background:'#fff'}}/>
+                <span style={{fontSize:11,color:'#92400e'}}>/ {sayilan}</span>
+              </div>);
             })}
           </div>
         )}
 
-        {itemList.length===0&&referenceItems.length===0&&<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'24px 0'}}>Henüz ürün taranmadı</p>}
-        {itemList.map(([ean,adet])=>{
-          const p=products[ean]||{};
-          const hasar=hasarlilar[ean]||0;
-          return (
-            <div key={ean} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 0',borderBottom:'1px solid #f1f5f9'}}>
-              <div style={{flex:1,minWidth:0}}>
-                <p style={{fontSize:13,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.urunAdi||ean}</p>
-                <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{p.malzemeKodu||ean}{hasar>0&&<span style={{color:'#d97706',marginLeft:8}}>⚠️ {hasar} hasarlı</span>}</p>
+        {visible.length===0&&<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'24px 0'}}>Henüz ürün taranmadı</p>}
+
+        {visible.map(item=>{
+          const key=getKey(item);
+          const cnt=counts[key]||item._adet||0;
+          const status=getStatus(item);
+          const st=ST[status];
+          const hasar=hasarlilar[key]||0;
+          const pct=item.beklenen>0?Math.min(100,(cnt/item.beklenen)*100):0;
+          return(
+            <div key={key} style={{background:st.card,border:`1px solid ${st.border}`,borderRadius:14,padding:'11px 12px',marginBottom:7}}>
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <div style={{width:8,height:8,borderRadius:'50%',flexShrink:0,background:st.dot}}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <p style={{fontSize:13,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||'—'}</p>
+                  <p style={{fontSize:10,color:'#94a3b8',marginTop:1,fontFamily:'monospace'}}>
+                    {item.malzemeKodu}{item.malzemeKodu?' · ':''}{item.ean}{hasar>0&&<span style={{color:'#d97706',marginLeft:6}}>⚠️{hasar} hasarlı</span>}
+                  </p>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:5,flexShrink:0}}>
+                  <button onClick={()=>setManualCount(item,Math.max(0,cnt-1))} style={{width:28,height:28,borderRadius:8,border:'1px solid #cbd5e1',background:'#f8fafc',fontWeight:800,cursor:'pointer',fontSize:16,lineHeight:1}}>−</button>
+                  <input type="number" min="0" value={cnt} onChange={e=>setManualCount(item,e.target.value)} onFocus={e=>e.target.select()}
+                    style={{width:item.beklenen>0?52:40,height:30,border:`2px solid ${st.border}`,borderRadius:8,textAlign:'center',fontSize:14,fontWeight:800,fontFamily:'monospace',color:st.cnt,outline:'none',background:'#fff'}}/>
+                  {isRef&&<span style={{fontSize:13,fontWeight:800,fontFamily:'monospace',color:'#94a3b8'}}>/{item.beklenen}</span>}
+                  <button onClick={()=>setManualCount(item,cnt+1)} style={{width:28,height:28,borderRadius:8,border:'1px solid #cbd5e1',background:'#f8fafc',fontWeight:800,cursor:'pointer',fontSize:16,lineHeight:1}}>+</button>
+                  {isRef&&cnt!==item.beklenen&&<button onClick={()=>setManualCount(item,item.beklenen)} style={{height:28,padding:'0 7px',borderRadius:8,border:'1px solid #bfdbfe',background:'#eff6ff',color:'#2563eb',fontWeight:700,cursor:'pointer',fontSize:11,whiteSpace:'nowrap'}}>={item.beklenen}</button>}
+                </div>
               </div>
-              <div style={{display:'flex',alignItems:'center',gap:5,flexShrink:0}}>
-                <button onClick={()=>setEntries(prev=>({...prev,[ean]:Math.max(0,adet-1)}))}
-                  style={{width:26,height:26,borderRadius:6,border:'1px solid #cbd5e1',background:'#f8fafc',cursor:'pointer',fontWeight:700,fontSize:15}}>−</button>
-                <input type="number" value={adet} onChange={e=>setEntries(prev=>({...prev,[ean]:Math.max(0,parseInt(e.target.value)||0)}))}
-                  style={{width:40,textAlign:'center',border:'1px solid #e2e8f0',borderRadius:6,padding:'3px 0',fontSize:13,fontWeight:700}} />
-                <button onClick={()=>setEntries(prev=>({...prev,[ean]:adet+1}))}
-                  style={{width:26,height:26,borderRadius:6,border:'1px solid #cbd5e1',background:'#f8fafc',cursor:'pointer',fontWeight:700,fontSize:15}}>+</button>
-              </div>
+              {isRef&&item.beklenen>1&&<div style={{marginTop:7,marginLeft:17,height:3,background:'#e2e8f0',borderRadius:4,overflow:'hidden'}}><div style={{height:'100%',borderRadius:4,transition:'width .3s',width:`${pct}%`,background:cnt>=item.beklenen?'#10b981':cnt>0?'#f59e0b':'transparent'}}/></div>}
             </div>
           );
         })}
       </div>
-      {toast&&<Toast {...toast} onDone={()=>setToast(null)} />}
+      {toast&&<Toast {...toast} onDone={()=>setToast(null)}/>}
     </div>
   );
 }
 
 /* ── ANA COMPONENT ── */
 export default function MalKabul() {
-  const defaultModule = 'mal_kabul';
   const { user, profile } = useAuth();
   const isAdmin = profile?.role==='admin';
 
   const [view, setView] = useState('list');
   const [sessions, setSessions] = useState([]);
   const [activeSession, setActiveSession] = useState(null);
-  const [selectedLok, setSelectedLok] = useState(null);
-  const [myEntries, setMyEntries] = useState([]);
-  const [allEntries, setAllEntries] = useState([]);
   const [products, setProducts] = useState({});
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [conflicts, setConflicts] = useState([]);
-  // Mal kabul
   const [mkTur, setMkTur] = useState('manuel');
   const [mkRef, setMkRef] = useState([]);
   const [mkEntries, setMkEntries] = useState([]);
-  // VAS
   const [vasItems, setVasItems] = useState({});
-  const [mkLokasyonlar, setMkLokasyonlar] = useState({}); // ean -> lokasyon (mal kabul direkt)
-  const [vasSessionId, setVasSessionId] = useState(null);
+  const [mkLokasyonlar, setMkLokasyonlar] = useState({});
   const [vasList, setVasList] = useState([]);
 
   const toast$ = (msg,type='info') => setToast({msg,type,id:Date.now()});
-  const isMalKabulModule = defaultModule === 'mal_kabul';
-  const moduleSessionTip = isMalKabulModule ? 'mal_kabul' : 'genel';
 
   useEffect(()=>{
     getDocs(collection(db,'products')).then(snap=>{
       const m={};
-      snap.docs.forEach(d=>{
-        const p=d.data();
-        const normalized = { id:d.id, ...p };
-        if(p.ean) m[String(p.ean).trim()] = normalized;
-        if(p.malzemeKodu) m[String(p.malzemeKodu).trim()] = normalized;
-      });
+      snap.docs.forEach(d=>{const p=d.data();if(p.ean)m[String(p.ean).trim()]={...p};if(p.malzemeKodu)m[String(p.malzemeKodu).trim()]={...p};});
       setProducts(m);
     });
   },[]);
 
   const loadSessions = useCallback(async()=>{
-    try {
-      const snap=await getDocs(query(collection(db,'countSessions'),orderBy('baslangic','desc')));
-      setSessions(snap.docs.map(d=>({id:d.id,...d.data()})));
-    }catch{}
+    try{const snap=await getDocs(query(collection(db,'countSessions'),where('tip','==','mal_kabul'),orderBy('baslangic','desc')));setSessions(snap.docs.map(d=>({id:d.id,...d.data()})));}catch{}
   },[]);
-
   useEffect(()=>{loadSessions();},[loadSessions]);
 
-  const detectConflicts = (entries) => {
-    const byLok={};
-    entries.forEach(e=>{
-      if(!e.lokasyon||e.lokasyon==='MAL_KABUL') return;
-      if(!byLok[e.lokasyon]) byLok[e.lokasyon]=[];
-      byLok[e.lokasyon].push(e);
-    });
-    const caks=[];
-    Object.entries(byLok).forEach(([lok,elist])=>{
-      if(elist.length<2) return;
-      for(let i=0;i<elist.length;i++){
-        for(let j=i+1;j<elist.length;j++){
-          if(!entriesMatch(elist[i].items,elist[j].items))
-            caks.push({lokasyon:lok,entry1:elist[i],entry2:elist[j]});
-        }
-      }
-    });
-    setConflicts(caks);
-  };
-
-  const entriesMatch = (a,b) => {
-    if(!a||!b||a.length!==b.length) return false;
-    const m1=Object.fromEntries(a.map(i=>[i.ean,i.adet]));
-    const m2=Object.fromEntries(b.map(i=>[i.ean,i.adet]));
-    for(const k of new Set([...Object.keys(m1),...Object.keys(m2)])){
-      if(m1[k]!==m2[k]) return false;
-    }
-    return true;
-  };
-
-  const loadEntries = useCallback(async(sessionId)=>{
-    const snap=await getDocs(query(collection(db,'countEntries'),where('sessionId','==',sessionId)));
-    const entries=snap.docs.map(d=>({id:d.id,...d.data()}));
-    setAllEntries(entries);
-    setMyEntries(entries.filter(e=>e.kullaniciId===user?.uid));
-    detectConflicts(entries);
-    return entries;
-  },[user]);
-
-  const startSession = async(tip) => {
-    setLoading(true);
-    try {
-      const ref=await addDoc(collection(db,'countSessions'),{
-        tip,durum:'aktif',
-        baslatan:profile?.name||user?.email||'',
-        baslantanId:user?.uid||'',
-        baslangic:Timestamp.now(),
-      });
-      const s={id:ref.id,tip,durum:'aktif',baslatan:profile?.name||user?.email||'',baslangic:Timestamp.now()};
-      setActiveSession(s);
-      setSessions(prev=>[s,...prev]);
-      setView(tip==='genel'?'genel_lok':'mal_kabul');
-    }catch(e){toast$('Hata: '+e.message,'error');}
-    setLoading(false);
-  };
-
-  const deleteSession = async(session) => {
-    if(!window.confirm(`"${session.tip==='genel'?'Genel Sayım':'Mal Kabul'}" oturumu silinecek.\n\nOturum silinse bile içerideki sayım verileri korunacak.\n\nEmin misiniz?`)) return;
-    try {
-      await deleteDoc(doc(db,'countSessions',session.id));
-      setSessions(prev=>prev.filter(s=>s.id!==session.id));
-      toast$('Oturum silindi (veriler korundu)','success');
-    }catch(e){toast$('Hata: '+e.message,'error');}
-  };
-
-  const handleSayimSubmit = async(entryId,items) => {
-    toast$(`${selectedLok} kaydedildi ✓`,'success');
-    setMyEntries(prev=>[...prev,{id:entryId,lokasyon:selectedLok,items,kullaniciId:user?.uid,kullanici:profile?.name||''}]);
-    setSelectedLok(null);
-    setView('genel_lok');
-  };
-
-  /* ── MAL KABUL REF PARSE ── */
   const parseMkRef = (file) => {
     const reader=new FileReader();
-    reader.onload=async ({target:{result}})=>{
-      try {
+    reader.onload=({target:{result}})=>{
+      try{
         const wb=XLSX.read(new Uint8Array(result),{type:'array'});
         const ws=wb.Sheets[wb.SheetNames[0]];
         const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
@@ -613,259 +425,98 @@ export default function MalKabul() {
           refData.push({malzemeKodu:kod,urunAdi:cUrun>=0?String(row[cUrun]||'').trim():'',ean:cEan>=0?String(row[cEan]||'').trim():'',beklenenAdet:adet});
         });
         setMkRef(refData);
-        setMkTur('referansli');
-        if(activeSession?.id){
-          await updateDoc(doc(db,'countSessions',activeSession.id),{
-            mkTur:'referansli',
-            referenceItems:refData,
-            referenceUpdatedAt:Timestamp.now()
-          });
-          setActiveSession(prev=>prev?{...prev,mkTur:'referansli',referenceItems:refData}:prev);
-        }
-        toast$(`${refData.length} kalem referans yüklendi`,'success');
+        toast$(`${refData.length} kalem yüklendi`,'success');
       }catch(e){toast$('Dosya hatası: '+e.message,'error');}
     };
     reader.readAsArrayBuffer(file);
   };
 
-  const startMalKabulSayim = async () => {
+  const startMalKabul = async() => {
     if(mkTur==='referansli'&&mkRef.length===0){toast$('Referans dosyası seçin','error');return;}
     setLoading(true);
-    try {
+    try{
       if(!activeSession){
-        const payload={
-          tip:'mal_kabul',durum:'aktif',
-          baslatan:profile?.name||user?.email||'',
-          baslantanId:user?.uid||'',
-          baslangic:Timestamp.now(),
-          mkTur,
-          referenceItems:mkTur==='referansli'?mkRef:[],
-          vasTransferItems:{},
-          mkLokasyonlar:{}
-        };
-        const ref=await addDoc(collection(db,'countSessions'),payload);
-        const s={id:ref.id,...payload};
-        setActiveSession(s);
-        setSessions(prev=>[s,...prev]);
-      }else{
-        await updateDoc(doc(db,'countSessions',activeSession.id),{
-          mkTur,
-          referenceItems:mkTur==='referansli'?mkRef:[],
-          updatedAt:Timestamp.now()
-        });
-        setActiveSession(prev=>prev?{...prev,mkTur,referenceItems:mkTur==='referansli'?mkRef:[]}:prev);
+        const ref=await addDoc(collection(db,'countSessions'),{tip:'mal_kabul',durum:'aktif',baslatan:profile?.name||user?.email||'',baslantanId:user?.uid||'',baslangic:Timestamp.now(),mkTur,referenceItems:mkTur==='referansli'?mkRef:[],vasTransferItems:{},mkLokasyonlar:{}});
+        const s={id:ref.id,tip:'mal_kabul',durum:'aktif',baslatan:profile?.name||user?.email||'',baslangic:Timestamp.now(),mkTur,referenceItems:mkTur==='referansli'?mkRef:[]};
+        setActiveSession(s);setSessions(prev=>[s,...prev]);
       }
       setView('mk_sayim');
     }catch(e){toast$('Hata: '+e.message,'error');}
     setLoading(false);
   };
 
-  const openMalKabulSession = async (s) => {
-    setActiveSession(s);
-    setMkTur(s.mkTur || (s.referenceItems?.length ? 'referansli' : 'manuel'));
-    setMkRef(s.referenceItems || []);
-    setVasItems(s.vasTransferItems || {});
-    setMkLokasyonlar(s.mkLokasyonlar || {});
-    const entries = await loadEntries(s.id);
-    setMkEntries(entries.map(e=>({id:e.id,items:e.items||[]})));
-    setView(entries.length>0 ? 'mk_ozet' : 'mk_sayim');
+  const handleSayimDone = (entryId, items) => {
+    setMkEntries(prev=>[...prev,{id:entryId,items}]);
+    setView('mk_ozet');
   };
 
-  const persistMalKabulOptions = async (nextVasItems=vasItems,nextLokasyonlar=mkLokasyonlar) => {
-    if(!activeSession?.id) return;
-    try {
-      await updateDoc(doc(db,'countSessions',activeSession.id),{
-        vasTransferItems:nextVasItems,
-        mkLokasyonlar:nextLokasyonlar,
-        updatedAt:Timestamp.now()
-      });
-    }catch(e){/* offline/permission durumunda ekran akışını bozma */}
-  };
-
-  /* ── MAL KABUL ONAY + VAS AYRIMI ── */
-  const malKabulOnayla = async(vasMap, lokasyonlarMap) => {
+  const malKabulOnayla = async() => {
     if(!activeSession) return;
+    const allItems={};
+    mkEntries.forEach(e=>{(e.items||[]).forEach(item=>{const key=item.malzemeKodu||item.ean;if(!allItems[key])allItems[key]={...item,adet:0,hasarliAdet:0};allItems[key].adet+=item.adet;allItems[key].hasarliAdet+=(item.hasarliAdet||0);});});
+    const itemList=Object.values(allItems);
+    const missing=itemList.find(i=>!mkLokasyonlar[i.ean||i.malzemeKodu]&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet);
+    if(missing){toast$(`${missing.urunAdi||missing.malzemeKodu} için lokasyon girin`,'error');return;}
     setLoading(true);
-    try {
-      const snap=await getDocs(query(collection(db,'countEntries'),where('sessionId','==',activeSession.id)));
-      const allItems={};
-      snap.docs.forEach(d=>{
-        (d.data().items||[]).forEach(item=>{
-          const key=item.malzemeKodu||item.ean;
-          if(!allItems[key]) allItems[key]={...item,adet:0,hasarliAdet:0};
-          allItems[key].adet+=item.adet;
-          allItems[key].hasarliAdet+=(item.hasarliAdet||0);
-        });
-      });
-
+    try{
       const now=Timestamp.now();
       const stockSnap=await getDocs(collection(db,'stock'));
-      const stockMap={};
-      stockSnap.docs.forEach(d=>{stockMap[d.id]=d.data();});
-
-      const batch=writeBatch(db);
-      const movBatch=writeBatch(db);
-      const vasItemsToSave=[];
-
-      Object.values(allItems).forEach(item=>{
+      const stockMap={};stockSnap.docs.forEach(d=>{stockMap[d.id]=d.data();});
+      const batch=writeBatch(db);const movBatch=writeBatch(db);const vasItemsToSave=[];
+      itemList.forEach(item=>{
         if(!item.ean) return;
-        const vasAdet=vasMap[item.ean||item.malzemeKodu]||0;
+        const vasAdet=vasItems[item.ean||item.malzemeKodu]||0;
         const lokAdet=item.adet-vasAdet;
         const prev=(stockMap[item.ean]?.miktar)||0;
         const next=prev+item.adet;
-        const lok=lokasyonlarMap[item.ean]||lokasyonlarMap[item.malzemeKodu]||'';
+        const lok=mkLokasyonlar[item.ean]||mkLokasyonlar[item.malzemeKodu]||'';
         const prevByLok=stockMap[item.ean]?.byLocation||{};
         const newByLok=lok&&lokAdet>0?{...prevByLok,[lok]:(prevByLok[lok]||0)+lokAdet}:prevByLok;
-
-        batch.set(doc(db,'stock',item.ean),{ean:item.ean,miktar:next,
-          urunAdi:item.urunAdi||'',malzemeKodu:item.malzemeKodu||'',
-          byLocation:newByLok,sonGuncelleme:now},{merge:true});
-
-        movBatch.set(doc(collection(db,'stockMovements')),{
-          tarih:now,tip:'mal_kabul',ean:item.ean,
-          malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',
-          miktar:item.adet,oncekiMiktar:prev,sonrakiMiktar:next,
-          hasarliAdet:item.hasarliAdet||0,
-          vasAdet,lokAdet,
-          kaynak:`mal_kabul:${activeSession.id}`,
-          yapan:profile?.name||user?.email||'',yapanId:user?.uid||''
-        });
-
-        if(vasAdet>0){
-          vasItemsToSave.push({ean:item.ean,malzemeKodu:item.malzemeKodu||'',
-            urunAdi:item.urunAdi||'',adet:vasAdet,
-            sessionId:activeSession.id,durum:'etiketleme_bekliyor',tarih:now});
-        }
+        batch.set(doc(db,'stock',item.ean),{ean:item.ean,miktar:next,urunAdi:item.urunAdi||'',malzemeKodu:item.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
+        movBatch.set(doc(collection(db,'stockMovements')),{tarih:now,tip:'mal_kabul',ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',miktar:item.adet,oncekiMiktar:prev,sonrakiMiktar:next,hasarliAdet:item.hasarliAdet||0,vasAdet,lokAdet,kaynak:`mal_kabul:${activeSession.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
+        if(vasAdet>0) vasItemsToSave.push({ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',adet:vasAdet,sessionId:activeSession.id,durum:'etiketleme_bekliyor',tarih:now});
       });
-
-      await batch.commit();
-      await movBatch.commit();
-
-      // VAS kayıtları
-      for(const vi of vasItemsToSave){
-        await addDoc(collection(db,'vasItems'),vi);
-      }
-
+      await batch.commit();await movBatch.commit();
+      for(const vi of vasItemsToSave) await addDoc(collection(db,'vasItems'),vi);
       await updateDoc(doc(db,'countSessions',activeSession.id),{durum:'tamamlandi',bitis:now});
       toast$('Mal kabul stoğa eklendi ✓','success');
-      setView('list');
+      setView('list');setActiveSession(null);setMkEntries([]);setVasItems({});setMkLokasyonlar({});setMkRef([]);
       loadSessions();
     }catch(e){toast$('Hata: '+e.message,'error');}
     setLoading(false);
   };
 
-  /* ── VAS TAMAMLA → LOKASYONA ── */
   const loadVasItems = useCallback(async()=>{
     const snap=await getDocs(query(collection(db,'vasItems'),where('durum','==','etiketleme_bekliyor')));
-    const list=snap.docs.map(d=>{
-      const item={id:d.id,...d.data()};
-      const product=products[String(item.ean||'').trim()]||products[String(item.malzemeKodu||'').trim()]||{};
-      return {
-        ...item,
-        urunAdi:item.urunAdi||product.urunAdi||item.ean,
-        malzemeKodu:item.malzemeKodu||product.malzemeKodu||'',
-        ean:item.ean||product.ean||''
-      };
-    });
-    setVasList(list);
-  },[products]);
+    setVasList(snap.docs.map(d=>({id:d.id,...d.data()})));
+  },[]);
 
   const vasLokasyonaGonder = async(vasItem,lokasyon) => {
     if(!lokasyon){toast$('Lokasyon seçin','error');return;}
-    try {
+    try{
       const now=Timestamp.now();
-      const stockSnap=await getDocs(query(collection(db,'stock'),where('ean','==',vasItem.ean)));
-      const prev=stockSnap.empty?0:(stockSnap.docs[0].data().miktar||0);
       await updateDoc(doc(db,'vasItems',vasItem.id),{durum:'tamamlandi',lokasyon,bitis:now});
-      await addDoc(collection(db,'stockMovements'),{
-        tarih:now,tip:'vas_lokasyon',ean:vasItem.ean,
-        malzemeKodu:vasItem.malzemeKodu||'',urunAdi:vasItem.urunAdi||'',
-        miktar:0,oncekiMiktar:prev,sonrakiMiktar:prev,
-        lokasyon,kaynak:`vas:${vasItem.id}`,
-        yapan:profile?.name||user?.email||'',yapanId:user?.uid||''
-      });
+      await addDoc(collection(db,'stockMovements'),{tarih:now,tip:'vas_lokasyon',ean:vasItem.ean,malzemeKodu:vasItem.malzemeKodu||'',urunAdi:vasItem.urunAdi||'',miktar:0,lokasyon,kaynak:`vas:${vasItem.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
       setVasList(prev=>prev.filter(v=>v.id!==vasItem.id));
       toast$('VAS → Lokasyona taşındı ✓','success');
     }catch(e){toast$('Hata: '+e.message,'error');}
   };
 
-  /* ── EXPORT ── */
-  const exportGenelSayim = async(sessionId) => {
-    const snap=await getDocs(query(collection(db,'countEntries'),where('sessionId','==',sessionId)));
-    const lokMap={};
-    snap.docs.forEach(d=>{
-      const e=d.data();
-      if(!lokMap[e.lokasyon]) lokMap[e.lokasyon]=e;
-    });
-    const rows=[['EAN Kodu','Malzeme Kodu','Ürün Adı','Sayılan Adet','Hasarlı Adet','Lokasyon']];
-    Object.entries(lokMap).forEach(([lok,entry])=>{
-      (entry.items||[]).forEach(item=>{
-        rows.push([item.ean||'',item.malzemeKodu||'',item.urunAdi||'',item.adet,item.hasarliAdet||0,lok]);
-      });
-    });
-    const wb=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Sayim');
-    XLSX.writeFile(wb,'genel_sayim_kok_stok.xlsx');
-  };
+  const S={card:{background:'#fff',borderRadius:14,padding:'14px 16px',border:'1px solid #e2e8f0',marginBottom:12},btn:{border:'none',borderRadius:10,padding:'10px 16px',fontSize:13,fontWeight:600,cursor:'pointer'}};
 
-  const S={
-    card:{background:'#fff',borderRadius:14,padding:'14px 16px',border:'1px solid #e2e8f0',marginBottom:12},
-    btn:{border:'none',borderRadius:10,padding:'10px 16px',fontSize:13,fontWeight:600,cursor:'pointer'},
-  };
-
-  /* ── SAYIM EKRANI ── */
-  if(view==='sayim'&&selectedLok&&activeSession){
-    return <SayimEkrani lokasyon={selectedLok} sessionId={activeSession.id}
-      sessionTip={activeSession.tip} products={products}
-      onSubmit={handleSayimSubmit}
-      onBack={()=>{setSelectedLok(null);setView('genel_lok');}}/>;
-  }
-
+  // Sayım ekranı
   if(view==='mk_sayim'&&activeSession){
-    return <SayimEkrani lokasyon="MAL_KABUL" sessionId={activeSession.id}
-      sessionTip="mal_kabul" products={products}
-      requireKnownProduct={mkTur==='referansli'}
-      referenceItems={mkTur==='referansli' ? mkRef : []}
-      onSubmit={(id,items)=>{setMkEntries(prev=>[...prev,{id,items}]);setView('mk_ozet');}}
-      onBack={()=>setView('list')}/>;
+    return <MalKabulSayimSession
+      sessionId={activeSession.id}
+      referenceItems={mkTur==='referansli'?mkRef:[]}
+      products={products}
+      onDone={handleSayimDone}
+      onBack={()=>setView('mal_kabul')}/>;
   }
 
-  /* ── GENEL SAYIM LOK SEÇ ── */
-  if(view==='genel_lok'&&activeSession){
-    const saydim=myEntries.map(e=>e.lokasyon);
-    return (
-      <div>
-        <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
-          <button onClick={()=>{setView('list');setActiveSession(null);}} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
-          <div style={{flex:1}}>
-            <p style={{color:'#fff',fontWeight:700,fontSize:14}}>📦 Genel Sayım</p>
-            <p style={{color:'#94a3b8',fontSize:11}}>{saydim.length} lokasyon sayıldı</p>
-          </div>
-          {isAdmin&&(
-            <button onClick={()=>{loadEntries(activeSession.id);setView('admin_detay');}}
-              style={{...S.btn,background:'#3b82f6',color:'#fff',padding:'7px 12px',fontSize:12}}>
-              Yönet
-            </button>
-          )}
-        </div>
-        {saydim.length>0&&(
-          <div style={{padding:'10px 16px',background:'#f0fdf4',borderBottom:'1px solid #dcfce7'}}>
-            <p style={{fontSize:12,fontWeight:600,color:'#15803d',marginBottom:6}}>✅ Saydığım lokasyonlar</p>
-            <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
-              {saydim.map(l=>(
-                <span key={l} style={{background:'#dcfce7',color:'#15803d',borderRadius:6,padding:'3px 8px',fontSize:11,fontWeight:600,fontFamily:'monospace'}}>{l}</span>
-              ))}
-            </div>
-          </div>
-        )}
-        <LokPicker onSelect={lok=>{setSelectedLok(lok);setView('sayim');}} currentLok={saydim[saydim.length-1]} />
-      </div>
-    );
-  }
-
-  /* ── MAL KABUL BAŞLANGIÇ ── */
+  // Mal kabul başlangıç
   if(view==='mal_kabul'){
-    return (
+    return(
       <div>
         <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
           <button onClick={()=>setView('list')} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
@@ -875,61 +526,46 @@ export default function MalKabul() {
           <div style={S.card}>
             <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:10}}>Sayım Türü</p>
             <div style={{display:'flex',gap:10}}>
-              {[['manuel','Manuel'],['referansli','Referanslı']].map(([t,l])=>(
-                <button key={t} onClick={()=>setMkTur(t)}
-                  style={{...S.btn,flex:1,background:mkTur===t?'#1e40af':'#f1f5f9',color:mkTur===t?'#fff':'#475569'}}>
-                  {l}
-                </button>
+              {[['manuel','✍️ Manuel'],['referansli','📋 Referanslı']].map(([t,l])=>(
+                <button key={t} onClick={()=>setMkTur(t)} style={{...S.btn,flex:1,background:mkTur===t?'#1e40af':'#f1f5f9',color:mkTur===t?'#fff':'#475569'}}>{l}</button>
               ))}
             </div>
           </div>
           {mkTur==='referansli'&&(
             <div style={S.card}>
-              <p style={{fontSize:13,fontWeight:700,marginBottom:8}}>Referans Dosyası</p>
+              <p style={{fontSize:13,fontWeight:700,marginBottom:4}}>Referans Dosyası</p>
+              <p style={{fontSize:11,color:'#64748b',marginBottom:10}}>Satın alma listesi — malzeme kodu + adet</p>
               {mkRef.length>0
                 ?<div style={{display:'flex',alignItems:'center',gap:10}}>
-                  <p style={{fontSize:12,color:'#10b981',fontWeight:600,flex:1}}>✅ {mkRef.length} kalem</p>
-                  <button onClick={async()=>{setMkRef([]); if(activeSession?.id){await updateDoc(doc(db,'countSessions',activeSession.id),{referenceItems:[],updatedAt:Timestamp.now()});}}} style={{...S.btn,background:'#fee2e2',color:'#ef4444',padding:'6px 12px',fontSize:12}}>Değiştir</button>
+                  <p style={{fontSize:12,color:'#10b981',fontWeight:600,flex:1}}>✅ {mkRef.length} kalem yüklendi</p>
+                  <button onClick={()=>setMkRef([])} style={{...S.btn,background:'#fee2e2',color:'#ef4444',padding:'6px 12px',fontSize:12}}>Değiştir</button>
                 </div>
                 :<label style={{...S.btn,background:'#f1f5f9',color:'#475569',display:'inline-block',cursor:'pointer'}}>
                   📂 Dosya Seç
-                  <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>{if(e.target.files[0])parseMkRef(e.target.files[0]);e.target.value='';}} />
+                  <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>{if(e.target.files[0])parseMkRef(e.target.files[0]);e.target.value='';}}/>
                 </label>
               }
             </div>
           )}
-          <button onClick={startMalKabulSayim}
-            disabled={loading||(mkTur==='referansli'&&mkRef.length===0)}
+          <button onClick={startMalKabul} disabled={loading||(mkTur==='referansli'&&mkRef.length===0)}
             style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',opacity:(mkTur==='referansli'&&mkRef.length===0)?.5:1}}>
-            Sayıma Başla →
+            {loading?'...':'Sayıma Başla →'}
           </button>
         </div>
       </div>
     );
   }
 
-  /* ── MAL KABUL ÖZET + VAS AYRIMI ── */
+  // Mal kabul özet
   if(view==='mk_ozet'&&activeSession){
     const allItems={};
-    mkEntries.forEach(e=>{
-      (e.items||[]).forEach(item=>{
-        const key=item.malzemeKodu||item.ean;
-        if(!allItems[key]) allItems[key]={...item,adet:0,hasarliAdet:0};
-        allItems[key].adet+=item.adet;
-        allItems[key].hasarliAdet+=(item.hasarliAdet||0);
-      });
-    });
+    mkEntries.forEach(e=>{(e.items||[]).forEach(item=>{const key=item.malzemeKodu||item.ean;if(!allItems[key])allItems[key]={...item,adet:0,hasarliAdet:0};allItems[key].adet+=item.adet;allItems[key].hasarliAdet+=(item.hasarliAdet||0);});});
     const itemList=Object.values(allItems);
     const toplam=itemList.reduce((a,i)=>a+i.adet,0);
     const toplamHasar=itemList.reduce((a,i)=>a+(i.hasarliAdet||0),0);
-
     const refMap=Object.fromEntries(mkRef.map(r=>[r.malzemeKodu,r]));
-    const tamEslesen=mkRef.length>0&&itemList.every(item=>{
-      const ref=refMap[item.malzemeKodu];
-      return ref&&ref.beklenenAdet===item.adet;
-    });
-
-    return (
+    const tamEslesen=mkRef.length>0&&itemList.every(i=>{const r=refMap[i.malzemeKodu];return r&&r.beklenenAdet===i.adet;});
+    return(
       <div>
         <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
           <button onClick={()=>setView('list')} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
@@ -937,94 +573,53 @@ export default function MalKabul() {
         </div>
         <div style={{padding:16}}>
           <div style={{...S.card,background:'#f0fdf4',border:'1px solid #bbf7d0'}}>
-            <p style={{fontSize:12,fontWeight:700,color:'#15803d'}}>📊 Özet</p>
-            <p style={{fontSize:12,color:'#166534',marginTop:4}}>{itemList.length} kalem · {toplam.toLocaleString()} adet{toplamHasar>0?` · ⚠️ ${toplamHasar} hasarlı`:''}</p>
+            <p style={{fontSize:13,fontWeight:700,color:'#15803d'}}>📊 {itemList.length} kalem · {toplam.toLocaleString()} adet{toplamHasar>0?` · ⚠️ ${toplamHasar} hasarlı`:''}</p>
             {tamEslesen&&<p style={{fontSize:12,color:'#10b981',marginTop:4,fontWeight:600}}>✅ Referans ile tam eşleşme</p>}
-            {mkRef.length>0&&!tamEslesen&&<p style={{fontSize:12,color:'#d97706',marginTop:4,fontWeight:600}}>⚠️ Referans ile fark var</p>}
+            {mkRef.length>0&&!tamEslesen&&<p style={{fontSize:12,color:'#d97706',marginTop:4,fontWeight:600}}>⚠️ Referans ile fark var — admin onayı gerekli</p>}
           </div>
-
-          {/* VAS Ayrımı */}
+          {/* VAS seçimi */}
           {itemList.length>0&&(
             <div style={S.card}>
-              <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:4}}>VAS Transfer</p>
-              <p style={{fontSize:11,color:'#64748b',marginBottom:10}}>Ürün tipi VAS'a transfer edilecekse sayılan gerçek adedin tamamı VAS'a gider.</p>
+              <p style={{fontSize:13,fontWeight:700,marginBottom:4}}>🏷️ VAS Transfer</p>
+              <p style={{fontSize:11,color:'#64748b',marginBottom:10}}>Etiketlenecek ürünleri seç</p>
               {itemList.map((item,i)=>{
-                const key=item.ean||item.malzemeKodu;
-                const selected=(vasItems[key]||0)>=item.adet;
-                return (
-                  <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:'1px solid #f1f5f9'}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <p style={{fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
-                      <p style={{fontSize:10,color:'#94a3b8'}}>Sayılan: {item.adet}{selected?' · VAS transfer edilecek':''}{item.hasarliAdet>0?` · ⚠️${item.hasarliAdet} hasarlı`:''}</p>
-                    </div>
-                    <button onClick={()=>{
-                      const next={...vasItems,[key]:selected?0:item.adet};
-                      setVasItems(next);
-                      persistMalKabulOptions(next,mkLokasyonlar);
-                    }}
-                      style={{...S.btn,background:selected?'#7c3aed':'#f1f5f9',color:selected?'#fff':'#475569',padding:'7px 10px',fontSize:12,flexShrink:0}}>
-                      {selected?'↩ Transfer İptal':'🏷️ VAS’a Transfer Et'}
-                    </button>
-                  </div>
-                );
+                const key=item.ean||item.malzemeKodu;const sel=(vasItems[key]||0)>=item.adet;
+                return(<div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:'1px solid #f1f5f9'}}>
+                  <div style={{flex:1,minWidth:0}}><p style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p><p style={{fontSize:10,color:'#94a3b8'}}>{item.adet} adet{item.hasarliAdet>0?` · ⚠️${item.hasarliAdet} hasarlı`:''}</p></div>
+                  <button onClick={()=>setVasItems(prev=>({...prev,[key]:sel?0:item.adet}))} style={{...S.btn,background:sel?'#7c3aed':'#f1f5f9',color:sel?'#fff':'#475569',padding:'6px 10px',fontSize:12}}>{sel?'↩ İptal':'VAS →'}</button>
+                </div>);
               })}
             </div>
           )}
-
-          {/* Lokasyon girişi — VAS'a gitmeyenler için */}
-          {itemList.filter(item=>(vasItems[item.ean||item.malzemeKodu]||0)<item.adet).length>0&&(
+          {/* Lokasyon girişi */}
+          {itemList.filter(i=>(vasItems[i.ean||i.malzemeKodu]||0)<i.adet).length>0&&(
             <div style={S.card}>
-              <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:4}}>📍 Lokasyon Ata</p>
-              <p style={{fontSize:11,color:'#64748b',marginBottom:10}}>Direkt lokasyona gidecek ürünler için lokasyon girin</p>
-              {/* Toplu uygula */}
+              <p style={{fontSize:13,fontWeight:700,marginBottom:4}}>📍 Lokasyon Ata</p>
               <div style={{background:'#eff6ff',borderRadius:8,padding:'8px 10px',marginBottom:10}}>
                 <p style={{fontSize:11,fontWeight:600,color:'#1d4ed8',marginBottom:5}}>Tümüne aynı lokasyon:</p>
                 <input placeholder="A109S013B" style={{width:'100%',padding:'7px 10px',border:'1px solid #bfdbfe',borderRadius:7,fontSize:13,fontFamily:'monospace',outline:'none',boxSizing:'border-box'}}
-                  onChange={e=>{
-                    const lok=e.target.value.trim().toUpperCase();
-                    if(!lok) return;
-                    const newLoks={...mkLokasyonlar};
-                    itemList.forEach(item=>{
-                      if((vasItems[item.ean||item.malzemeKodu]||0)<item.adet)
-                        newLoks[item.ean||item.malzemeKodu]=lok;
-                    });
-                    setMkLokasyonlar(newLoks);
-                    persistMalKabulOptions(vasItems,newLoks);
-                  }} />
+                  onChange={e=>{const lok=e.target.value.trim().toUpperCase();if(!lok)return;const n={...mkLokasyonlar};itemList.forEach(i=>{if((vasItems[i.ean||i.malzemeKodu]||0)<i.adet)n[i.ean||i.malzemeKodu]=lok;});setMkLokasyonlar(n);}}/>
               </div>
-              {itemList.filter(item=>(vasItems[item.ean||item.malzemeKodu]||0)<item.adet).map((item,i)=>(
+              {itemList.filter(i=>(vasItems[i.ean||i.malzemeKodu]||0)<i.adet).map((item,i)=>(
                 <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 0',borderBottom:'1px solid #f1f5f9'}}>
-                  <p style={{flex:1,fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-                    {item.urunAdi||item.malzemeKodu}
-                  </p>
-                  <input placeholder="Lokasyon"
-                    value={mkLokasyonlar[item.ean||item.malzemeKodu]||''}
-                    onChange={e=>{const next={...mkLokasyonlar,[item.ean||item.malzemeKodu]:e.target.value.trim().toUpperCase()};setMkLokasyonlar(next);persistMalKabulOptions(vasItems,next);}}
-                    style={{width:110,padding:'5px 8px',border:'1px solid #e2e8f0',borderRadius:7,fontSize:11,fontFamily:'monospace',outline:'none',
-                      background:mkLokasyonlar[item.ean||item.malzemeKodu]?'#f0fdf4':'#fff'}} />
+                  <p style={{flex:1,fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
+                  <input placeholder="Lokasyon" value={mkLokasyonlar[item.ean||item.malzemeKodu]||''}
+                    onChange={e=>setMkLokasyonlar(prev=>({...prev,[item.ean||item.malzemeKodu]:e.target.value.trim().toUpperCase()}))}
+                    style={{width:110,padding:'5px 8px',border:'1px solid #e2e8f0',borderRadius:7,fontSize:11,fontFamily:'monospace',outline:'none',background:mkLokasyonlar[item.ean||item.malzemeKodu]?'#f0fdf4':'#fff'}}/>
                 </div>
               ))}
             </div>
           )}
-
-          <button onClick={()=>setView('mk_sayim')}
-            style={{...S.btn,width:'100%',background:'#3b82f6',color:'#fff',marginBottom:10}}>
-            ➕ Daha Fazla Ürün Say
-          </button>
-          {isAdmin&&(
-            <button onClick={()=>{ const missing=itemList.find(i=>!mkLokasyonlar[i.ean||i.malzemeKodu]&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet); if(missing){alert((missing.urunAdi||missing.malzemeKodu)+' için lokasyon giriniz');return;} malKabulOnayla(vasItems,mkLokasyonlar);}} disabled={loading||itemList.length===0}
-              style={{...S.btn,width:'100%',background:'#10b981',color:'#fff',opacity:loading?.6:1}}>
-              {loading?'Ekleniyor...':'✅ Onayla ve Stoğa Ekle'}
-            </button>
-          )}
+          <button onClick={()=>setView('mk_sayim')} style={{...S.btn,width:'100%',background:'#3b82f6',color:'#fff',marginBottom:10}}>➕ Daha Fazla Ürün Say</button>
+          {isAdmin&&<button onClick={malKabulOnayla} disabled={loading||itemList.length===0} style={{...S.btn,width:'100%',background:'#10b981',color:'#fff',opacity:loading?.6:1}}>{loading?'Ekleniyor...':'✅ Onayla ve Stoğa Ekle'}</button>}
         </div>
       </div>
     );
   }
 
-  /* ── VAS LİSTESİ ── */
+  // VAS listesi
   if(view==='vas_liste'){
-    return (
+    return(
       <div>
         <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
           <button onClick={()=>setView('list')} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
@@ -1032,187 +627,65 @@ export default function MalKabul() {
         </div>
         <div style={{padding:16}}>
           {vasList.length===0&&<p style={{color:'#94a3b8',textAlign:'center',padding:'32px 0'}}>VAS'ta bekleyen ürün yok</p>}
-          {vasList.map(item=>(
-            <VasCard key={item.id} item={item} onSend={vasLokasyonaGonder} />
-          ))}
+          {vasList.map(item=><VasCard key={item.id} item={item} onSend={vasLokasyonaGonder}/>)}
         </div>
       </div>
     );
   }
 
-  /* ── ADMİN DETAY ── */
-  if(view==='admin_detay'&&activeSession){
-    const lokGroups={};
-    allEntries.forEach(e=>{if(!lokGroups[e.lokasyon])lokGroups[e.lokasyon]=[];lokGroups[e.lokasyon].push(e);});
-    return (
-      <div>
-        <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
-          <button onClick={()=>setView('genel_lok')} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
-          <p style={{color:'#fff',fontWeight:700,fontSize:14}}>Sayım Yönetimi</p>
-          <button onClick={()=>exportGenelSayim(activeSession.id)}
-            style={{...S.btn,marginLeft:'auto',background:'#10b981',color:'#fff',padding:'7px 12px',fontSize:12}}>
-            ⬇️ Kök Stok Excel
-          </button>
-        </div>
-        <div style={{padding:16}}>
-          <div style={{...S.card,background:'#f8fafc'}}>
-            <p style={{fontSize:12,color:'#64748b'}}>{allEntries.length} giriş · {Object.keys(lokGroups).length} lokasyon · {conflicts.length} çakışma</p>
-          </div>
-          {conflicts.map((c,i)=>(
-            <div key={i} style={{...S.card,border:'1px solid #fecaca',background:'#fff1f2'}}>
-              <p style={{fontSize:12,fontWeight:700,color:'#dc2626',marginBottom:8}}>⚠️ Çakışma: {c.lokasyon}</p>
-              <div style={{display:'flex',gap:8}}>
-                {[c.entry1,c.entry2].map((e,j)=>(
-                  <button key={j} onClick={async()=>{
-                    await updateDoc(doc(db,'countEntries',e.id),{durum:'onaylandi'});
-                    const other=j===0?c.entry2:c.entry1;
-                    await updateDoc(doc(db,'countEntries',other.id),{durum:'reddedildi'});
-                    setConflicts(prev=>prev.filter(x=>x.lokasyon!==c.lokasyon));
-                    toast$('Çakışma çözüldü ✓','success');
-                  }}
-                    style={{...S.btn,flex:1,background:'#f1f5f9',color:'#1e293b',fontSize:12}}>
-                    ✓ {e.kullanici}<br/><span style={{fontSize:10,color:'#64748b'}}>{e.items?.length} kalem</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-          {Object.entries(lokGroups).map(([lok,entries])=>(
-            <div key={lok} style={S.card}>
-              <div style={{display:'flex',alignItems:'center',gap:8}}>
-                <p style={{fontSize:12,fontWeight:700,fontFamily:'monospace',color:'#1e293b',flex:1}}>{lok}</p>
-                {entries.length>1
-                  ?<span style={{background:'#fef3c7',color:'#d97706',borderRadius:6,padding:'2px 8px',fontSize:10,fontWeight:700}}>⚠️ {entries.length}</span>
-                  :<span style={{background:'#dcfce7',color:'#15803d',borderRadius:6,padding:'2px 8px',fontSize:10,fontWeight:700}}>✅</span>}
-              </div>
-              {entries.map((e,j)=>(
-                <p key={j} style={{fontSize:11,color:'#64748b',marginTop:2}}>{e.kullanici}: {e.items?.length} kalem</p>
-              ))}
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  /* ── LİST ── */
-  const visibleSessions = sessions.filter(s => s.tip === moduleSessionTip);
-  const aktifler=visibleSessions.filter(s=>s.durum==='aktif');
-  const bitmisler=visibleSessions.filter(s=>s.durum!=='aktif');
-
-  return (
+  // Ana liste
+  const aktifler=sessions.filter(s=>s.durum==='aktif');
+  const bitmisler=sessions.filter(s=>s.durum!=='aktif');
+  return(
     <div>
       <div style={{background:'#0f172a',padding:'14px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-        <p style={{color:'#fff',fontWeight:700,fontSize:16}}>{isMalKabulModule ? '📥 Mal Kabul' : '🔢 Sayım'}</p>
-        {isMalKabulModule && (
-          <button onClick={()=>{loadVasItems();setView('vas_liste');}}
-            style={{...S.btn,background:'#7c3aed',color:'#fff',padding:'7px 12px',fontSize:12}}>
-            🏷️ VAS Listesi
-          </button>
-        )}
+        <p style={{color:'#fff',fontWeight:700,fontSize:16}}>📥 Mal Kabul</p>
+        <button onClick={()=>{loadVasItems();setView('vas_liste');}} style={{...S.btn,background:'#7c3aed',color:'#fff',padding:'7px 12px',fontSize:12}}>🏷️ VAS Listesi</button>
       </div>
       <div style={{padding:16}}>
-        {isAdmin && !isMalKabulModule && (
-          <div style={{display:'flex',gap:10,marginBottom:16}}>
-            <button onClick={()=>startSession('genel')} disabled={loading}
-              style={{...S.btn,flex:1,background:'#1e40af',color:'#fff'}}>
-              📦 Genel Sayım Başlat
-            </button>
-          </div>
-        )}
-        {isMalKabulModule && (
-          <button onClick={()=>{setActiveSession(null);setMkTur('manuel');setMkRef([]);setMkEntries([]);setVasItems({});setMkLokasyonlar({});setView('mal_kabul');}} disabled={loading}
-            style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',marginBottom:16}}>
-            📥 Mal Kabul Sayımı Başlat
-          </button>
-        )}
-
-        {aktifler.length>0&&(
-          <>
-            <p style={{fontSize:12,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:8}}>Aktif Oturumlar</p>
-            {aktifler.map(s=>(
-              <div key={s.id} style={{...S.card,border:'1px solid #bfdbfe',background:'#eff6ff'}}>
-                <div style={{display:'flex',alignItems:'center',gap:10}}>
-                  <div style={{flex:1}}>
-                    <p style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>{s.tip==='genel'?'📦 Genel Sayım':'📥 Mal Kabul'}</p>
-                    <p style={{fontSize:11,color:'#64748b'}}>{s.baslatan} · {s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||''}</p>
-                  </div>
-                  <button onClick={()=>{if(s.tip==='mal_kabul') openMalKabulSession(s); else {setActiveSession(s);loadEntries(s.id);setView('genel_lok');}}}
-                    style={{...S.btn,background:'#1e40af',color:'#fff',padding:'8px 14px',fontSize:12}}>
-                    {s.baslantanId===user?.uid?'Devam →':'Katıl →'}
-                  </button>
-                  {isAdmin&&(
-                    <button onClick={()=>deleteSession(s)}
-                      style={{...S.btn,background:'#fee2e2',color:'#ef4444',padding:'8px 10px',fontSize:13}}>
-                      🗑
-                    </button>
-                  )}
-                </div>
+        <button onClick={()=>{setActiveSession(null);setMkTur('manuel');setMkRef([]);setMkEntries([]);setVasItems({});setMkLokasyonlar({});setView('mal_kabul');}}
+          style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',marginBottom:16}}>📥 Yeni Mal Kabul Başlat</button>
+        {aktifler.length>0&&<>
+          <p style={{fontSize:12,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:8}}>Aktif Oturumlar</p>
+          {aktifler.map(s=>(
+            <div key={s.id} style={{...S.card,border:'1px solid #bfdbfe',background:'#eff6ff'}}>
+              <div style={{display:'flex',alignItems:'center',gap:10}}>
+                <div style={{flex:1}}><p style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>📥 Mal Kabul</p><p style={{fontSize:11,color:'#64748b'}}>{s.baslatan} · {s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||''}</p></div>
+                <button onClick={()=>{setActiveSession(s);setMkTur(s.mkTur||'manuel');setMkRef(s.referenceItems||[]);setView('mk_sayim');}} style={{...S.btn,background:'#1e40af',color:'#fff',padding:'8px 14px',fontSize:12}}>Devam →</button>
               </div>
-            ))}
-          </>
-        )}
-
-        {bitmisler.length>0&&(
-          <>
-            <p style={{fontSize:12,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:8,marginTop:16}}>Tamamlanan</p>
-            {bitmisler.slice(0,10).map(s=>(
-              <div key={s.id} style={S.card}>
-                <div style={{display:'flex',alignItems:'center',gap:10}}>
-                  <div style={{flex:1}}>
-                    <p style={{fontSize:13,fontWeight:600,color:'#475569'}}>{s.tip==='genel'?'📦 Genel Sayım':'📥 Mal Kabul'}</p>
-                    <p style={{fontSize:11,color:'#94a3b8'}}>{s.baslatan} · {s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||''}</p>
-                  </div>
-                  {isAdmin&&s.tip==='genel'&&(
-                    <button onClick={()=>exportGenelSayim(s.id)}
-                      style={{...S.btn,background:'#f1f5f9',color:'#475569',padding:'6px 10px',fontSize:11}}>
-                      ⬇️ Excel
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </>
-        )}
-
-        {visibleSessions.length===0&&!loading&&(
-          <div style={{textAlign:'center',padding:'48px 0',color:'#94a3b8'}}>
-            <p style={{fontSize:32,marginBottom:8}}>{isMalKabulModule ? '📥' : '🔢'}</p>
-            <p style={{fontSize:14,fontWeight:600}}>{isMalKabulModule ? 'Henüz mal kabul yok' : 'Henüz sayım yok'}</p>
-          </div>
-        )}
+            </div>
+          ))}
+        </>}
+        {bitmisler.length>0&&<>
+          <p style={{fontSize:12,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:8,marginTop:16}}>Tamamlanan</p>
+          {bitmisler.slice(0,10).map(s=>(
+            <div key={s.id} style={S.card}>
+              <p style={{fontSize:13,fontWeight:600,color:'#475569'}}>📥 Mal Kabul — {s.durum}</p>
+              <p style={{fontSize:11,color:'#94a3b8'}}>{s.baslatan} · {s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||''}</p>
+            </div>
+          ))}
+        </>}
+        {sessions.length===0&&!loading&&<div style={{textAlign:'center',padding:'48px 0',color:'#94a3b8'}}><p style={{fontSize:32,marginBottom:8}}>📥</p><p style={{fontSize:14,fontWeight:600}}>Henüz mal kabul yok</p></div>}
       </div>
-      {toast&&<Toast {...toast} onDone={()=>setToast(null)} />}
+      {toast&&<Toast {...toast} onDone={()=>setToast(null)}/>}
     </div>
   );
 }
 
-/* ── VAS KART ── */
-function VasCard({ item, onSend }) {
-  const [lok, setLok] = useState('');
-  const [showPicker, setShowPicker] = useState(false);
-  return (
+function VasCard({item,onSend}){
+  const[lok,setLok]=useState('');const[showPicker,setShowPicker]=useState(false);
+  return(
     <div style={{background:'#fff',borderRadius:14,padding:'14px 16px',border:'1px solid #e2e8f0',marginBottom:12}}>
       <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean}</p>
-      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>{(item.malzemeKodu||item.ean)||'-'} · {item.adet} adet</p>
+      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>{item.malzemeKodu||item.ean} · {item.adet} adet</p>
       {!showPicker?(
         <div style={{display:'flex',gap:8}}>
-          <input value={lok} onChange={e=>setLok(e.target.value.toUpperCase())}
-            placeholder="Lokasyon (örn: A109S013B)"
-            style={{flex:1,padding:'8px 12px',border:'1px solid #e2e8f0',borderRadius:8,fontSize:13,outline:'none',fontFamily:'monospace'}} />
-          <button onClick={()=>setShowPicker(true)}
-            style={{background:'#f1f5f9',border:'none',borderRadius:8,padding:'8px 10px',cursor:'pointer',fontSize:13}}>
-            📍
-          </button>
-          <button onClick={()=>onSend(item,lok)} disabled={!lok}
-            style={{background:'#10b981',border:'none',borderRadius:8,color:'#fff',padding:'8px 14px',fontSize:13,fontWeight:600,cursor:'pointer',opacity: !lok ? .5 : 1}}>
-            Gönder ✓
-          </button>
+          <input value={lok} onChange={e=>setLok(e.target.value.toUpperCase())} placeholder="Lokasyon (A109S013B)" style={{flex:1,padding:'8px 12px',border:'1px solid #e2e8f0',borderRadius:8,fontSize:13,outline:'none',fontFamily:'monospace'}}/>
+          <button onClick={()=>setShowPicker(true)} style={{background:'#f1f5f9',border:'none',borderRadius:8,padding:'8px 10px',cursor:'pointer',fontSize:13}}>📍</button>
+          <button onClick={()=>onSend(item,lok)} disabled={!lok} style={{background:'#10b981',border:'none',borderRadius:8,color:'#fff',padding:'8px 14px',fontSize:13,fontWeight:600,cursor:'pointer',opacity:!lok?.5:1}}>Gönder ✓</button>
         </div>
       ):(
-        <div>
-          <LokPicker onSelect={l=>{setLok(l);setShowPicker(false);}} />
-        </div>
+        <LokPicker onSelect={l=>{setLok(l);setShowPicker(false);}}/>
       )}
     </div>
   );
