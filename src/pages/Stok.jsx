@@ -141,6 +141,74 @@ export default function Stok() {
   const [searchRes, setSearchRes] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const searchTimer = useRef(null);
+  const [searchCamOn, setSearchCamOn] = useState(false);
+  const searchVideoRef = useRef(null);
+  const searchStreamRef = useRef(null);
+  const searchDetectorRef = useRef(null);
+  const searchRafRef = useRef(null);
+  const searchLastRef = useRef({ code:'', emptySince:0 });
+
+  const stopSearchCam = useCallback(() => {
+    if (searchRafRef.current) cancelAnimationFrame(searchRafRef.current);
+    searchRafRef.current = null;
+    if (searchStreamRef.current) searchStreamRef.current.getTracks().forEach(t => t.stop());
+    searchStreamRef.current = null;
+    if (searchVideoRef.current) searchVideoRef.current.srcObject = null;
+    searchLastRef.current = { code:'', emptySince:0 };
+    setSearchCamOn(false);
+  }, []);
+
+  const scanSearchBarcode = useCallback(() => {
+    if (!searchVideoRef.current || !searchDetectorRef.current) return;
+    searchDetectorRef.current.detect(searchVideoRef.current).then(res => {
+      const now = Date.now();
+      if (!res.length) {
+        const last = searchLastRef.current;
+        searchLastRef.current = { ...last, emptySince: last.emptySince || now };
+        if (now - searchLastRef.current.emptySince > 900) {
+          searchLastRef.current = { code:'', emptySince: searchLastRef.current.emptySince };
+        }
+      } else {
+        const code = String(res[0].rawValue || '').trim();
+        searchLastRef.current.emptySince = 0;
+        if (code && code !== searchLastRef.current.code) {
+          searchLastRef.current = { code, emptySince:0 };
+          setSearchQ(code);
+          toast$('Barkod okundu: ' + code, 'success');
+          stopSearchCam();
+          return;
+        }
+      }
+      searchRafRef.current = requestAnimationFrame(scanSearchBarcode);
+    }).catch(() => {
+      searchRafRef.current = requestAnimationFrame(scanSearchBarcode);
+    });
+  }, [stopSearchCam]);
+
+  const startSearchCam = useCallback(async () => {
+    try {
+      if (!('BarcodeDetector' in window)) {
+        toast$('Kamera barkod tarama desteklenmiyor', 'warning');
+        return;
+      }
+      if (!searchDetectorRef.current) {
+        searchDetectorRef.current = new window.BarcodeDetector({ formats:['ean_13','ean_8','code_128','code_39','upc_a','upc_e','qr_code'] });
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:'environment' } } });
+      searchStreamRef.current = stream;
+      if (searchVideoRef.current) {
+        searchVideoRef.current.srcObject = stream;
+        await searchVideoRef.current.play();
+      }
+      setSearchCamOn(true);
+      searchRafRef.current = requestAnimationFrame(scanSearchBarcode);
+    } catch (e) {
+      toast$('Kamera açılamadı: ' + e.message, 'error');
+      stopSearchCam();
+    }
+  }, [scanSearchBarcode, stopSearchCam]);
+
+  useEffect(() => () => stopSearchCam(), [stopSearchCam]);
 
   useEffect(() => {
     clearTimeout(searchTimer.current);
@@ -572,8 +640,22 @@ export default function Stok() {
         {/* ── ÜRÜN ARA ── */}
         {tab==='Ürün Ara' && (
           <div style={S.card}>
-            <input style={S.input} placeholder="EAN, malzeme kodu veya ürün adı..."
-              value={searchQ} onChange={e => setSearchQ(e.target.value)} autoFocus />
+            <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+              <input style={{ ...S.input, flex:1 }} placeholder="EAN, malzeme kodu veya ürün adı..."
+                value={searchQ} onChange={e => setSearchQ(e.target.value)} autoFocus />
+              <button onClick={() => searchCamOn ? stopSearchCam() : startSearchCam()}
+                style={{ ...S.btn, background:searchCamOn?'#ef4444':'#1e40af', color:'#fff', whiteSpace:'nowrap', padding:'10px 12px' }}>
+                {searchCamOn ? 'Durdur' : '📷 Tara'}
+              </button>
+            </div>
+            {searchCamOn && (
+              <div style={{ marginTop:10, borderRadius:12, overflow:'hidden', background:'#000' }}>
+                <video ref={searchVideoRef} style={{ width:'100%', maxHeight:220, objectFit:'cover', display:'block' }} playsInline muted />
+                <p style={{ fontSize:11, color:'#64748b', background:'#f8fafc', padding:'7px 10px' }}>
+                  Barkod okutulunca arama otomatik yapılır. Aynı barkod kadrajda kaldığı sürece tekrar okunmaz.
+                </p>
+              </div>
+            )}
             <div style={{ marginTop:12 }}>
               {searchLoading && <p style={{ color:'#94a3b8', fontSize:13, textAlign:'center' }}>Aranıyor...</p>}
               {!searchLoading && searchQ.length>=2 && searchRes.length===0 && (
