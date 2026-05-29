@@ -5,7 +5,6 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import * as XLSX from 'xlsx';
 
-/* ── Toast ─────────────────────────────────────────── */
 function Toast({ msg, type, onDone }) {
   const bg = { success:'#10b981', error:'#ef4444', warning:'#f59e0b', info:'#3b82f6' };
   useEffect(() => { const t = setTimeout(onDone, 3500); return () => clearTimeout(t); }, [onDone]);
@@ -28,7 +27,6 @@ const getRafList = (koridor) => {
   return Array.from({ length: end - start + 1 }, (_, i) => start + i);
 };
 
-/* ── Product Row ─────────────────────────────────── */
 function ProductRow({ p, isAdmin, onAdjust }) {
   const miktar = p.miktar ?? null;
   const kritik = miktar !== null && miktar <= 0;
@@ -74,7 +72,6 @@ function ProductRow({ p, isAdmin, onAdjust }) {
   );
 }
 
-/* ── MAIN ─────────────────────────────────────────── */
 export default function Stok() {
   const { user, profile } = useAuth();
   const isAdmin = profile?.role === 'admin';
@@ -103,6 +100,52 @@ export default function Stok() {
   }, []);
   useEffect(() => { loadStats(); }, [loadStats]);
 
+  /* ── Export ── */
+  const exportStok = async () => {
+    try {
+      toast$('Stok dışa aktarılıyor...', 'info');
+      const [stockSnap, prodSnap] = await Promise.all([
+        getDocs(collection(db, 'stock')),
+        getDocs(collection(db, 'products')),
+      ]);
+      const prodMap = {};
+      prodSnap.docs.forEach(d => { const p = d.data(); if (p.ean) prodMap[p.ean] = p; });
+      const stockData = stockSnap.docs
+        .map(d => ({ ean: d.id, ...d.data() }))
+        .sort((a, b) => (a.urunAdi || '').localeCompare(b.urunAdi || ''));
+
+      // Sayfa 1: Özet
+      const ozet = [['EAN Kodu', 'Malzeme Kodu', 'Ürün Adı', 'Toplam Miktar']];
+      stockData.forEach(s => {
+        const p = prodMap[s.ean] || {};
+        ozet.push([s.ean || '', s.malzemeKodu || p.malzemeKodu || '',
+          s.urunAdi || p.urunAdi || '', s.miktar || 0]);
+      });
+
+      // Sayfa 2: Lokasyon Detay
+      const lokDetay = [['EAN Kodu', 'Malzeme Kodu', 'Ürün Adı', 'Lokasyon', 'Miktar']];
+      stockData.forEach(s => {
+        const p = prodMap[s.ean] || {};
+        const byLok = s.byLocation || {};
+        if (Object.keys(byLok).length > 0) {
+          Object.entries(byLok).forEach(([lok, m]) => {
+            if (m !== 0) lokDetay.push([s.ean || '', s.malzemeKodu || p.malzemeKodu || '',
+              s.urunAdi || p.urunAdi || '', lok, m]);
+          });
+        } else {
+          lokDetay.push([s.ean || '', s.malzemeKodu || p.malzemeKodu || '',
+            s.urunAdi || p.urunAdi || '', '', s.miktar || 0]);
+        }
+      });
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ozet), 'Stok Özet');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lokDetay), 'Lokasyon Detay');
+      XLSX.writeFile(wb, `stok_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      toast$('Stok Excel indirildi ✓', 'success');
+    } catch (e) { toast$('Hata: ' + e.message, 'error'); }
+  };
+
   /* ── RAF GÖRÜNÜMÜ ── */
   const [koridor, setKoridor] = useState('109');
   const [raf, setRaf] = useState(null);
@@ -124,7 +167,6 @@ export default function Stok() {
         const s = await getDoc(doc(db,'stock',p.ean));
         if (!s.exists()) return { ...p, miktar:null, totalMiktar:null };
         const data = s.data();
-        // Lokasyona özgü miktar varsa onu göster, yoksa toplam
         const lokMiktar = data.byLocation?.[rafKod] ?? null;
         const totalMiktar = data.miktar ?? null;
         return { ...p, miktar: lokMiktar !== null ? lokMiktar : totalMiktar, totalMiktar };
@@ -194,23 +236,18 @@ export default function Stok() {
   const startSearchCam = useCallback(async () => {
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
-        toast$('Bu cihazda kamera erişimi desteklenmiyor', 'warning');
-        return;
+        toast$('Bu cihazda kamera erişimi desteklenmiyor', 'warning'); return;
       }
       if (!('BarcodeDetector' in window)) {
-        toast$('Bu tarayıcı barkod taramayı desteklemiyor. Android Chrome veya masaüstü Chrome deneyin.', 'warning');
-        return;
+        toast$('Bu tarayıcı barkod taramayı desteklemiyor.', 'warning'); return;
       }
       if (!searchDetectorRef.current) {
-        searchDetectorRef.current = new window.BarcodeDetector({ formats:['ean_13','ean_8','code_128','code_39','upc_a','upc_e','qr_code'] });
+        searchDetectorRef.current = new window.BarcodeDetector({
+          formats:['ean_13','ean_8','code_128','code_39','upc_a','upc_e','qr_code'] });
       }
-
-      // Video elementi ekranda render edilsin diye önce paneli açıyoruz.
-      // Mobilde siyah ekranın ana sebebi, stream'in video ref oluşmadan bağlanmasıydı.
       setSearchCamOn(true);
       setSearchCamMsg('Kamera açılıyor...');
       await new Promise(resolve => setTimeout(resolve, 120));
-
       let stream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -220,22 +257,13 @@ export default function Stok() {
       } catch {
         stream = await navigator.mediaDevices.getUserMedia({ audio:false, video:true });
       }
-
       searchStreamRef.current = stream;
       if (!searchVideoRef.current) throw new Error('Video alanı hazırlanamadı');
-
       const video = searchVideoRef.current;
-      video.srcObject = stream;
-      video.muted = true;
-      video.setAttribute('playsinline', 'true');
-      video.setAttribute('webkit-playsinline', 'true');
-
-      await new Promise(resolve => {
-        video.onloadedmetadata = resolve;
-        setTimeout(resolve, 900);
-      });
+      video.srcObject = stream; video.muted = true;
+      video.setAttribute('playsinline','true'); video.setAttribute('webkit-playsinline','true');
+      await new Promise(resolve => { video.onloadedmetadata = resolve; setTimeout(resolve, 900); });
       await video.play();
-
       setSearchCamMsg('Barkodu kameraya gösterin');
       searchRafRef.current = requestAnimationFrame(scanSearchBarcode);
     } catch (e) {
@@ -281,7 +309,6 @@ export default function Stok() {
       const prodSnap = await getDocs(collection(db,'products'));
       const prodMap = {};
       prodSnap.docs.forEach(d => { const p=d.data(); if(p.ean) prodMap[p.ean]=p; });
-
       const kritik = [];
       stockSnap.docs.forEach(d => {
         const s = {ean:d.id,...d.data()};
@@ -292,20 +319,13 @@ export default function Stok() {
           malzemeKodu: prod.malzemeKodu || s.malzemeKodu || '',
           locations: prod.locations || [],
         };
-        // Toplam stok sıfır veya eksi
-        if ((s.miktar||0) <= 0) {
-          kritik.push({ ...base, kritikTip: 'toplam' });
-        }
-        // Lokasyon bazlı eksiler (toplam pozitif olsa bile)
+        if ((s.miktar||0) <= 0) kritik.push({ ...base, kritikTip: 'toplam' });
         if (s.byLocation) {
           Object.entries(s.byLocation).forEach(([lok, m]) => {
-            if (m < 0) {
-              kritik.push({ ...base, miktar: m, kritikLokasyon: lok, kritikTip: 'lokasyon' });
-            }
+            if (m < 0) kritik.push({ ...base, miktar: m, kritikLokasyon: lok, kritikTip: 'lokasyon' });
           });
         }
       });
-
       setKritikList(kritik.sort((a,b) => (a.miktar||0)-(b.miktar||0)));
     } catch {}
     setKritikLoading(false);
@@ -342,8 +362,6 @@ export default function Stok() {
           const wb = XLSX.read(new Uint8Array(result), { type:'array' });
           const ws = wb.Sheets[wb.SheetNames[0]];
           const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
-
-          // Header detection - esnek
           let hIdx=0, cEan=-1, cCode=-1, cMiktar=-1, cUrun=-1;
           for (let r=0; r<Math.min(rows.length,10); r++) {
             const cells = rows[r].map(c=>String(c||'').toLowerCase().replace(/\s+/g,' ').trim());
@@ -356,34 +374,24 @@ export default function Stok() {
             });
             if (score>=2) { hIdx=r; break; }
           }
-          // Son sütunu miktar olarak dene
           if (cMiktar<0 && rows[hIdx]?.length>0) cMiktar=rows[hIdx].length-1;
-          if (cMiktar<0) {
-            toast$('Miktar sütunu bulunamadı','error');
-            setImpLoading(false); return;
-          }
+          if (cMiktar<0) { toast$('Miktar sütunu bulunamadı','error'); setImpLoading(false); return; }
 
-          // Delete all existing stock
           const existing = await getDocs(collection(db,'stock'));
           const delBatch = writeBatch(db);
           existing.docs.forEach(d => delBatch.delete(d.ref));
           await delBatch.commit();
 
-          // Write new stock
           const now = Timestamp.now();
           let count=0;
           const movBatch = writeBatch(db);
           const stockBatch = writeBatch(db);
-
-          // Lokasyon sütunu var mı?
           let cLok = -1;
           if (rows[hIdx]) {
             rows[hIdx].map(c=>String(c||'').toLowerCase().trim()).forEach((cell,j) => {
               if (/lokasyon|location/.test(cell) && cLok<0) cLok=j;
             });
           }
-
-          // Önce tüm satırları oku, EAN başına byLocation ve toplam miktar hesapla
           const eanDataMap = {};
           rows.slice(hIdx+1).forEach(row => {
             const ean = String(row[cEan]||'').trim();
@@ -392,31 +400,23 @@ export default function Stok() {
             const urunAdi = cUrun>=0?String(row[cUrun]||'').trim():'';
             const malzemeKodu = cCode>=0?String(row[cCode]||'').trim():'';
             const lokasyon = cLok>=0?String(row[cLok]||'').trim():'';
-
-            if (!eanDataMap[ean]) {
-              eanDataMap[ean] = { ean, urunAdi, malzemeKodu, miktar:0, byLocation:{} };
-            }
+            if (!eanDataMap[ean]) eanDataMap[ean] = { ean, urunAdi, malzemeKodu, miktar:0, byLocation:{} };
             eanDataMap[ean].miktar += miktar;
-            if (lokasyon) {
-              eanDataMap[ean].byLocation[lokasyon] = (eanDataMap[ean].byLocation[lokasyon]||0) + miktar;
-            }
+            if (lokasyon) eanDataMap[ean].byLocation[lokasyon] = (eanDataMap[ean].byLocation[lokasyon]||0)+miktar;
           });
 
           Object.values(eanDataMap).forEach(item => {
             stockBatch.set(doc(db,'stock',item.ean), {
-              ean:item.ean, miktar:item.miktar,
-              urunAdi:item.urunAdi, malzemeKodu:item.malzemeKodu,
-              byLocation:item.byLocation, sonGuncelleme:now
+              ean:item.ean, miktar:item.miktar, urunAdi:item.urunAdi,
+              malzemeKodu:item.malzemeKodu, byLocation:item.byLocation, sonGuncelleme:now
             });
             movBatch.set(doc(collection(db,'stockMovements')), {
-              tarih:now, tip:'kök_stok', ean:item.ean,
-              malzemeKodu:item.malzemeKodu, urunAdi:item.urunAdi,
-              miktar:item.miktar, oncekiMiktar:0, sonrakiMiktar:item.miktar,
+              tarih:now, tip:'kök_stok', ean:item.ean, malzemeKodu:item.malzemeKodu,
+              urunAdi:item.urunAdi, miktar:item.miktar, oncekiMiktar:0, sonrakiMiktar:item.miktar,
               kaynak:'excel_kök_stok', yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
             });
             count++;
           });
-
           await stockBatch.commit();
           await movBatch.commit();
           toast$(`${count} ürün kök stok olarak yüklendi ✓`,'success');
@@ -428,14 +428,117 @@ export default function Stok() {
     } catch { setImpLoading(false); }
   };
 
+  /* ── SEVKİYAT EXCEL ── */
+  const [sevkiyatPreview, setSevkiyatPreview] = useState(null);
+
+  const importSevkiyat = async (file) => {
+    setImpLoading(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async ({ target: { result } }) => {
+        try {
+          const wb = XLSX.read(new Uint8Array(result), { type:'array' });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
+          let hIdx=0, cEan=-1, cCode=-1, cMiktar=-1, cUrun=-1;
+          for (let r=0; r<Math.min(rows.length,10); r++) {
+            const cells = rows[r].map(c=>String(c||'').toLowerCase().replace(/\s+/g,' ').trim());
+            let score=0;
+            cells.forEach((cell,j) => {
+              if (/ean|barkod|barcode/.test(cell) && cEan<0) { cEan=j; score++; }
+              if (/(malzeme|stok|item)\s*(kodu?|code?)/.test(cell) && cCode<0) { cCode=j; score++; }
+              if (/miktar|adet|qty|quantity|kullan/.test(cell) && cMiktar<0) { cMiktar=j; score++; }
+              if (/açıklama|aciklama|ürün ad|description/.test(cell) && cUrun<0) cUrun=j;
+            });
+            if (score>=2) { hIdx=r; break; }
+          }
+          if (cMiktar<0 && rows[hIdx]?.length>0) cMiktar=rows[hIdx].length-1;
+          if (cMiktar<0) { toast$('Miktar sütunu bulunamadı','error'); setImpLoading(false); return; }
+
+          // EAN lookup
+          const prodSnap = await getDocs(collection(db,'products'));
+          const eanByCode = {};
+          prodSnap.docs.forEach(d => {
+            const p = d.data();
+            if (p.malzemeKodu) eanByCode[p.malzemeKodu] = p;
+            if (p.ean) eanByCode[p.ean] = p;
+          });
+          const stockSnap = await getDocs(collection(db,'stock'));
+          const stockMap = {};
+          stockSnap.docs.forEach(d => { stockMap[d.id] = d.data(); });
+
+          const currentStock = {};
+          const previewItems = [];
+          rows.slice(hIdx+1).forEach(row => {
+            const rawEan = cEan>=0?String(row[cEan]||'').trim():'';
+            const rawCode = cCode>=0?String(row[cCode]||'').trim():'';
+            const miktar = parseInt(String(row[cMiktar]||'0').replace(/\D/g,''),10)||0;
+            if (miktar<=0) return;
+            const prod = eanByCode[rawEan]||eanByCode[rawCode]||{};
+            const ean = prod.ean||rawEan;
+            if (!ean) return;
+            currentStock[ean] = (currentStock[ean]||0)+miktar;
+            const urunAdi = cUrun>=0?String(row[cUrun]||'').trim():prod.urunAdi||'';
+            const malzemeKodu = rawCode||prod.malzemeKodu||'';
+            previewItems.push({ ean, malzemeKodu, urunAdi, miktar });
+          });
+
+          setSevkiyatPreview({ items: previewItems, lokasyonlar: {} });
+          toast$(`${previewItems.length} ürün bulundu — lokasyon girin`, 'info');
+        } catch(e) { toast$('Hata: '+e.message,'error'); }
+        setImpLoading(false);
+      };
+      reader.readAsArrayBuffer(file);
+    } catch { setImpLoading(false); }
+  };
+
+  const saveSevkiyatWithLok = async () => {
+    if (!sevkiyatPreview) return;
+    const { items, lokasyonlar } = sevkiyatPreview;
+    const missingLok = items.find(i => !lokasyonlar[i.ean]);
+    if (missingLok) { toast$(`${missingLok.urunAdi||missingLok.ean} için lokasyon giriniz`, 'error'); return; }
+    setImpLoading(true);
+    try {
+      const now = Timestamp.now();
+      const stockSnap = await getDocs(collection(db,'stock'));
+      const stockMap = {};
+      stockSnap.docs.forEach(d => { stockMap[d.id] = d.data(); });
+      const batch = writeBatch(db);
+      const movBatch = writeBatch(db);
+      items.forEach(item => {
+        const prev = stockMap[item.ean]?.miktar || 0;
+        const next = prev + item.miktar;
+        const lok = lokasyonlar[item.ean];
+        const prevByLok = stockMap[item.ean]?.byLocation || {};
+        const newByLok = { ...prevByLok, [lok]: (prevByLok[lok]||0) + item.miktar };
+        batch.set(doc(db,'stock',item.ean), {
+          ean:item.ean, miktar:next, urunAdi:item.urunAdi||'',
+          malzemeKodu:item.malzemeKodu||'', byLocation:newByLok, sonGuncelleme:now
+        }, {merge:true});
+        movBatch.set(doc(collection(db,'stockMovements')), {
+          tarih:now, tip:'sevkiyat_excel', ean:item.ean,
+          malzemeKodu:item.malzemeKodu||'', urunAdi:item.urunAdi||'',
+          miktar:item.miktar, oncekiMiktar:prev, sonrakiMiktar:next,
+          lokasyon:lok, kaynak:'sevkiyat_excel',
+          yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
+        });
+      });
+      await batch.commit();
+      await movBatch.commit();
+      setSevkiyatPreview(null);
+      toast$(`${items.length} ürün lokasyonlarıyla stoğa eklendi ✓`, 'success');
+      loadStats();
+    } catch(e) { toast$('Hata: '+e.message, 'error'); }
+    setImpLoading(false);
+  };
+
   /* ── YÖNETİM: MANUEL GİRİŞ ── */
   const [manualQuery, setManualQuery] = useState('');
   const [manualProd, setManualProd] = useState(null);
   const [manualMiktar, setManualMiktar] = useState('');
   const [manualLok, setManualLok] = useState('');
-  const [manualTip, setManualTip] = useState('giris'); // 'giris' | 'cikis'
+  const [manualTip, setManualTip] = useState('giris');
   const [manualLoading, setManualLoading] = useState(false);
-  // Lokasyon picker
   const [lokKoridor, setLokKoridor] = useState('109');
   const [lokRaf, setLokRaf] = useState(null);
   const [lokKat, setLokKat] = useState(null);
@@ -452,9 +555,7 @@ export default function Stok() {
         const s = await getDoc(doc(db,'stock',found.ean||''));
         const stockData = s.exists() ? s.data() : {};
         setManualProd({...found, currentMiktar: stockData.miktar||0, byLocation: stockData.byLocation||{}});
-      } else {
-        setManualProd(null);
-      }
+      } else { setManualProd(null); }
     } catch {}
   };
 
@@ -467,21 +568,17 @@ export default function Stok() {
     const prevByLok = manualProd.byLocation || {};
     const prevLokMiktar = prevByLok[lok] || 0;
     if (manualTip==='cikis' && prevLokMiktar < miktar) {
-      if (!window.confirm(`⚠️ ${lok} lokasyonunda yalnızca ${prevLokMiktar} adet var. Yine de ${miktar} adet çıkış yapılsın mı? (Lokasyon stoğu eksiye düşer)`)) return;
+      if (!window.confirm(`⚠️ ${lok} lokasyonunda yalnızca ${prevLokMiktar} adet var. Yine de ${miktar} adet çıkış yapılsın mı?`)) return;
     }
     setManualLoading(true);
     try {
       const now = Timestamp.now();
       const prev = manualProd.currentMiktar||0;
-      const lok = manualLok.trim().toUpperCase();
-      const prevByLok = manualProd.byLocation || {};
-      const prevLokMiktar = prevByLok[lok] || 0;
       const isGiris = manualTip === 'giris';
       const delta = isGiris ? miktar : -miktar;
       const next = prev + delta;
       const newLokMiktar = prevLokMiktar + delta;
       const newByLok = { ...prevByLok, [lok]: newLokMiktar };
-
       await setDoc(doc(db,'stock',manualProd.ean), {
         ean:manualProd.ean, miktar:next,
         urunAdi:manualProd.urunAdi||'', malzemeKodu:manualProd.malzemeKodu||'',
@@ -489,14 +586,12 @@ export default function Stok() {
       }, {merge:true});
       await addDoc(collection(db,'stockMovements'), {
         tarih:now, tip: isGiris ? 'sevkiyat_manuel' : 'cikis_manuel',
-        ean:manualProd.ean,
-        malzemeKodu:manualProd.malzemeKodu||'', urunAdi:manualProd.urunAdi||'',
+        ean:manualProd.ean, malzemeKodu:manualProd.malzemeKodu||'', urunAdi:manualProd.urunAdi||'',
         miktar:delta, oncekiMiktar:prev, sonrakiMiktar:next,
         lokasyon:lok, kaynak:'manuel',
         yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
       });
-      const arrow = isGiris ? '→' : '→';
-      toast$(`${isGiris?'Giriş':'Çıkış'}: ${manualProd.urunAdi||manualProd.ean} ${prev} ${arrow} ${next} ✓`,'success');
+      toast$(`${isGiris?'Giriş':'Çıkış'}: ${manualProd.urunAdi||manualProd.ean} ${prev} → ${next} ✓`,'success');
       setManualProd({...manualProd, currentMiktar:next, byLocation:newByLok});
       setManualMiktar('');
       loadStats();
@@ -515,9 +610,7 @@ export default function Stok() {
     try {
       const now = Timestamp.now();
       const prev = adjustProd.miktar||0;
-      await setDoc(doc(db,'stock',adjustProd.ean), {
-        ean:adjustProd.ean, miktar:yeni, sonGuncelleme:now
-      }, {merge:true});
+      await setDoc(doc(db,'stock',adjustProd.ean), { ean:adjustProd.ean, miktar:yeni, sonGuncelleme:now }, {merge:true});
       await addDoc(collection(db,'stockMovements'), {
         tarih:now, tip:'duzeltme', ean:adjustProd.ean,
         malzemeKodu:adjustProd.malzemeKodu||'', urunAdi:adjustProd.urunAdi||'',
@@ -528,27 +621,27 @@ export default function Stok() {
       setAdjustProd(null);
       if (tab==='Raf Görünümü') loadRaf();
       if (tab==='Kritik Stok') loadKritik();
-      if (tab==='Ürün Ara') { /* refresh search */ }
       loadStats();
     } catch(e) { toast$('Hata: '+e.message,'error'); }
   };
 
-  /* ── RENDER ─────────────────────────────────────── */
+  /* ── RENDER ── */
   const S = {
     page:{ padding:'16px', maxWidth:700, margin:'0 auto' },
     tab:{ border:'none', background:'none', padding:'8px 14px', fontSize:13,
       fontWeight:600, cursor:'pointer', borderRadius:8, transition:'all .15s' },
     card:{ background:'#fff', borderRadius:14, padding:'16px', border:'1px solid #e2e8f0', marginBottom:12 },
-    btn:{ border:'none', borderRadius:10, padding:'10px 16px', fontSize:13,
-      fontWeight:600, cursor:'pointer' },
+    btn:{ border:'none', borderRadius:10, padding:'10px 16px', fontSize:13, fontWeight:600, cursor:'pointer' },
     input:{ width:'100%', padding:'10px 14px', borderRadius:10, border:'1px solid #e2e8f0',
       fontSize:14, outline:'none', boxSizing:'border-box' },
   };
 
   const tipLabel = { kök_stok:'📥 Kök Stok', sevkiyat_excel:'📦 Sevkiyat', sevkiyat_manuel:'✍️ Manuel',
-    irsaliye_cikis:'📤 İrsaliye', duzeltme:'✏️ Düzeltme' };
+    cikis_manuel:'📤 Çıkış', irsaliye_cikis:'📤 İrsaliye', duzeltme:'✏️ Düzeltme',
+    mal_kabul:'📥 Mal Kabul', vas_lokasyon:'🏷️ VAS' };
   const tipColor = { kök_stok:'#3b82f6', sevkiyat_excel:'#10b981', sevkiyat_manuel:'#8b5cf6',
-    irsaliye_cikis:'#f59e0b', duzeltme:'#64748b' };
+    cikis_manuel:'#ef4444', irsaliye_cikis:'#f59e0b', duzeltme:'#64748b',
+    mal_kabul:'#10b981', vas_lokasyon:'#7c3aed' };
 
   return (
     <div>
@@ -556,7 +649,12 @@ export default function Stok() {
       <div style={{ background:'#0f172a', padding:'12px 16px', display:'flex',
         alignItems:'center', justifyContent:'space-between' }}>
         <p style={{ color:'#fff', fontWeight:700, fontSize:16 }}>📦 Stok Yönetimi</p>
-        <div style={{ display:'flex', gap:16 }}>
+        <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+          <button onClick={exportStok}
+            style={{ background:'#10b981', border:'none', borderRadius:8, color:'#fff',
+              padding:'7px 12px', fontSize:12, fontWeight:600, cursor:'pointer' }}>
+            ⬇️ Excel
+          </button>
           <div style={{ textAlign:'center' }}>
             <p style={{ color:'#94a3b8', fontSize:10 }}>ÇEŞİT</p>
             <p style={{ color:'#fff', fontWeight:700, fontSize:15 }}>{stats.cesit}</p>
@@ -588,7 +686,6 @@ export default function Stok() {
         {/* ── RAF GÖRÜNÜMÜ ── */}
         {tab==='Raf Görünümü' && (
           <>
-            {/* Koridor */}
             <div style={S.card}>
               <p style={{ fontSize:12, fontWeight:700, color:'#64748b', marginBottom:10,
                 textTransform:'uppercase', letterSpacing:1 }}>Koridor</p>
@@ -603,8 +700,6 @@ export default function Stok() {
                 ))}
               </div>
             </div>
-
-            {/* Raf picker */}
             <div style={S.card}>
               <p style={{ fontSize:12, fontWeight:700, color:'#64748b', marginBottom:10,
                 textTransform:'uppercase', letterSpacing:1 }}>
@@ -623,8 +718,6 @@ export default function Stok() {
                 ))}
               </div>
             </div>
-
-            {/* Kat picker */}
             {raf && (
               <div style={S.card}>
                 <p style={{ fontSize:12, fontWeight:700, color:'#64748b', marginBottom:10,
@@ -641,27 +734,17 @@ export default function Stok() {
                 </div>
               </div>
             )}
-
-            {/* Results */}
             {rafKod && (
               <div style={S.card}>
                 <p style={{ fontSize:12, fontWeight:700, color:'#64748b', marginBottom:2,
-                  textTransform:'uppercase', letterSpacing:1 }}>
-                  📍 {rafKod}
-                </p>
+                  textTransform:'uppercase', letterSpacing:1 }}>📍 {rafKod}</p>
                 {rafLoading ? (
-                  <p style={{ color:'#94a3b8', fontSize:13, padding:'20px 0', textAlign:'center' }}>
-                    Yükleniyor...
-                  </p>
+                  <p style={{ color:'#94a3b8', fontSize:13, padding:'20px 0', textAlign:'center' }}>Yükleniyor...</p>
                 ) : rafProds.length === 0 ? (
-                  <p style={{ color:'#94a3b8', fontSize:13, padding:'20px 0', textAlign:'center' }}>
-                    Bu rafta ürün bulunamadı
-                  </p>
+                  <p style={{ color:'#94a3b8', fontSize:13, padding:'20px 0', textAlign:'center' }}>Bu rafta ürün bulunamadı</p>
                 ) : (
                   <>
-                    <p style={{ fontSize:12, color:'#94a3b8', marginBottom:8 }}>
-                      {rafProds.length} ürün
-                    </p>
+                    <p style={{ fontSize:12, color:'#94a3b8', marginBottom:8 }}>{rafProds.length} ürün</p>
                     {rafProds.map((p,i) => (
                       <ProductRow key={i} p={p} isAdmin={isAdmin}
                         onAdjust={isAdmin ? (p) => { setAdjustProd(p); setAdjustMiktar(String(p.miktar??'')); } : null} />
@@ -686,20 +769,16 @@ export default function Stok() {
             </div>
             {searchCamOn && (
               <div style={{ marginTop:10, borderRadius:12, overflow:'hidden', background:'#000', position:'relative' }}>
-                <video
-                  ref={searchVideoRef}
+                <video ref={searchVideoRef}
                   style={{ width:'100%', height:'min(42vh,260px)', objectFit:'cover', display:'block', background:'#000' }}
-                  playsInline
-                  muted
-                  autoPlay
-                />
+                  playsInline muted autoPlay />
                 {searchCamMsg && (
                   <div style={{ position:'absolute', left:10, top:10, background:'rgba(15,23,42,.75)', color:'#fff', borderRadius:8, padding:'5px 8px', fontSize:11, fontWeight:700 }}>
                     {searchCamMsg}
                   </div>
                 )}
                 <p style={{ fontSize:11, color:'#64748b', background:'#f8fafc', padding:'7px 10px' }}>
-                  Barkod okutulunca arama otomatik yapılır. Aynı barkod kadrajda kaldığı sürece tekrar okunmaz.
+                  Barkod okutulunca arama otomatik yapılır.
                 </p>
               </div>
             )}
@@ -752,8 +831,7 @@ export default function Stok() {
               <p style={{ fontSize:12, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:1 }}>
                 Son 100 Hareket
               </p>
-              <button onClick={loadHareketler} style={{ ...S.btn, padding:'6px 12px',
-                background:'#f1f5f9', color:'#64748b', fontSize:12 }}>↻ Yenile</button>
+              <button onClick={loadHareketler} style={{ ...S.btn, padding:'6px 12px', background:'#f1f5f9', color:'#64748b', fontSize:12 }}>↻ Yenile</button>
             </div>
             {hareketLoading ? (
               <p style={{ color:'#94a3b8', fontSize:13, textAlign:'center', padding:'20px 0' }}>Yükleniyor...</p>
@@ -763,9 +841,8 @@ export default function Stok() {
               hareketler.map((h,i) => (
                 <div key={i} style={{ display:'flex', alignItems:'center', gap:10,
                   padding:'8px 0', borderBottom:'1px solid #f1f5f9' }}>
-                  <div style={{ background: tipColor[h.tip]||'#94a3b8',
-                    color:'#fff', borderRadius:6, padding:'2px 8px', fontSize:11,
-                    fontWeight:700, flexShrink:0, whiteSpace:'nowrap' }}>
+                  <div style={{ background: tipColor[h.tip]||'#94a3b8', color:'#fff', borderRadius:6,
+                    padding:'2px 8px', fontSize:11, fontWeight:700, flexShrink:0, whiteSpace:'nowrap' }}>
                     {tipLabel[h.tip]||h.tip}
                   </div>
                   <div style={{ flex:1, minWidth:0 }}>
@@ -783,8 +860,7 @@ export default function Stok() {
                     )}
                   </div>
                   <div style={{ textAlign:'right', flexShrink:0 }}>
-                    <p style={{ fontSize:13, fontWeight:700,
-                      color: (h.miktar||0)>=0?'#10b981':'#ef4444' }}>
+                    <p style={{ fontSize:13, fontWeight:700, color: (h.miktar||0)>=0?'#10b981':'#ef4444' }}>
                       {(h.miktar||0)>0?'+':''}{h.miktar}
                     </p>
                     <p style={{ fontSize:10, color:'#94a3b8' }}>{h.oncekiMiktar}→{h.sonrakiMiktar}</p>
@@ -795,19 +871,15 @@ export default function Stok() {
           </div>
         )}
 
-        {/* ── YÖNET (admin) ── */}
+        {/* ── YÖNET ── */}
         {tab==='Yönet' && isAdmin && (
           <>
             {/* Kök Stok */}
             <div style={S.card}>
-              <p style={{ fontSize:13, fontWeight:700, color:'#1e293b', marginBottom:4 }}>
-                📥 Kök Stok Yükle
-              </p>
-              <p style={{ fontSize:12, color:'#ef4444', marginBottom:10 }}>
-                ⚠️ Tüm stok verisi sıfırlanır ve yenisiyle değiştirilir
-              </p>
+              <p style={{ fontSize:13, fontWeight:700, color:'#1e293b', marginBottom:4 }}>📥 Kök Stok Yükle</p>
+              <p style={{ fontSize:12, color:'#ef4444', marginBottom:6 }}>⚠️ Tüm stok verisi sıfırlanır</p>
               <p style={{ fontSize:12, color:'#64748b', marginBottom:10 }}>
-                Format: EAN Kodu, Malzeme Kodu, Ürün Adı, Miktar (veya Kullanılabilir Miktar)
+                Format: EAN Kodu, Malzeme Kodu, Ürün Adı, Miktar, Lokasyon (opsiyonel)
               </p>
               <label style={{ ...S.btn, background:'#1e40af', color:'#fff',
                 display:'inline-block', cursor:'pointer', opacity:impLoading?0.6:1 }}>
@@ -818,31 +890,82 @@ export default function Stok() {
               </label>
             </div>
 
+            {/* Sevkiyat Excel */}
+            <div style={S.card}>
+              <p style={{ fontSize:13, fontWeight:700, color:'#1e293b', marginBottom:4 }}>📦 Sevkiyat Ekle (Excel)</p>
+              <p style={{ fontSize:12, color:'#64748b', marginBottom:10 }}>Mevcut stoğun üstüne eklenir.</p>
+              {!sevkiyatPreview ? (
+                <label style={{ ...S.btn, background:'#10b981', color:'#fff',
+                  display:'inline-block', cursor:'pointer', opacity:impLoading?0.6:1 }}>
+                  {impLoading ? 'Yükleniyor...' : '📂 Excel Seç'}
+                  <input type="file" accept=".xlsx,.xls,.csv" style={{ display:'none' }}
+                    disabled={impLoading}
+                    onChange={e => { if(e.target.files[0]) importSevkiyat(e.target.files[0]); e.target.value=''; }} />
+                </label>
+              ) : (
+                <div>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+                    <p style={{ fontSize:12, fontWeight:700, color:'#10b981' }}>✅ {sevkiyatPreview.items.length} ürün</p>
+                    <button onClick={() => setSevkiyatPreview(null)}
+                      style={{ ...S.btn, padding:'5px 10px', fontSize:12, background:'#fee2e2', color:'#ef4444' }}>İptal</button>
+                  </div>
+                  <div style={{ background:'#f0fdf4', borderRadius:10, padding:'10px 12px', marginBottom:10, border:'1px solid #bbf7d0' }}>
+                    <p style={{ fontSize:11, fontWeight:700, color:'#15803d', marginBottom:6 }}>Tümüne aynı lokasyon:</p>
+                    <input placeholder="Örn: A109S013B" style={{ ...S.input, fontFamily:'monospace' }}
+                      onChange={e => {
+                        const lok = e.target.value.trim().toUpperCase();
+                        if (!lok) return;
+                        setSevkiyatPreview(prev => ({
+                          ...prev,
+                          lokasyonlar: Object.fromEntries(prev.items.map(i => [i.ean, lok]))
+                        }));
+                      }} />
+                  </div>
+                  {sevkiyatPreview.items.map((item, i) => (
+                    <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 0', borderBottom:'1px solid #f1f5f9' }}>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <p style={{ fontSize:12, fontWeight:600, color:'#1e293b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                          {item.urunAdi||item.ean}
+                        </p>
+                        <p style={{ fontSize:10, color:'#94a3b8' }}>{item.miktar} adet eklenecek</p>
+                      </div>
+                      <input placeholder="Lokasyon"
+                        value={sevkiyatPreview.lokasyonlar[item.ean]||''}
+                        onChange={e => setSevkiyatPreview(prev => ({
+                          ...prev,
+                          lokasyonlar: { ...prev.lokasyonlar, [item.ean]: e.target.value.trim().toUpperCase() }
+                        }))}
+                        style={{ width:110, padding:'5px 8px', border:'1px solid #e2e8f0',
+                          borderRadius:7, fontSize:11, fontFamily:'monospace', outline:'none',
+                          background: sevkiyatPreview.lokasyonlar[item.ean]?'#f0fdf4':'#fff' }} />
+                    </div>
+                  ))}
+                  <button onClick={saveSevkiyatWithLok} disabled={impLoading}
+                    style={{ ...S.btn, width:'100%', marginTop:10, background:'#10b981', color:'#fff', opacity:impLoading?0.6:1 }}>
+                    {impLoading ? 'Kaydediliyor...' : '✅ Lokasyonlarla Kaydet'}
+                  </button>
+                </div>
+              )}
+            </div>
+
             {/* Manuel */}
             <div style={S.card}>
-              <p style={{ fontSize:13, fontWeight:700, color:'#1e293b', marginBottom:10 }}>
-                ✍️ Manuel Stok Hareketi
-              </p>
-
-              {/* Giriş / Çıkış toggle */}
-              <div style={{ display:'flex', gap:6, marginBottom:12, background:'#f1f5f9',
-                borderRadius:10, padding:4 }}>
+              <p style={{ fontSize:13, fontWeight:700, color:'#1e293b', marginBottom:10 }}>✍️ Manuel Stok Hareketi</p>
+              <div style={{ display:'flex', gap:6, marginBottom:12, background:'#f1f5f9', borderRadius:10, padding:4 }}>
                 {[['giris','📥 Giriş','#10b981'],['cikis','📤 Çıkış','#ef4444']].map(([tip,lbl,clr])=>(
                   <button key={tip} onClick={()=>setManualTip(tip)}
-                    style={{ flex:1, border:'none', borderRadius:8, padding:'8px 0',
-                      fontSize:13, fontWeight:700, cursor:'pointer',
+                    style={{ flex:1, border:'none', borderRadius:8, padding:'8px 0', fontSize:13,
+                      fontWeight:700, cursor:'pointer',
                       background: manualTip===tip ? clr : 'transparent',
                       color: manualTip===tip ? '#fff' : '#64748b' }}>
                     {lbl}
                   </button>
                 ))}
               </div>
-
               <input style={{ ...S.input, marginBottom:10 }}
                 placeholder="EAN veya malzeme kodu (tam girin)"
                 value={manualQuery}
                 onChange={e => { setManualQuery(e.target.value); lookupManual(e.target.value); }} />
-
               {manualProd && (
                 <div style={{ background:'#f8fafc', borderRadius:10, padding:'10px 12px' }}>
                   <p style={{ fontSize:13, fontWeight:600, color:'#1e293b' }}>{manualProd.urunAdi}</p>
@@ -852,65 +975,49 @@ export default function Stok() {
                   <p style={{ fontSize:12, color:'#64748b', marginBottom:10 }}>
                     Toplam stok: <strong>{manualProd.currentMiktar}</strong> adet
                   </p>
-
-                  {/* Lokasyon seçici */}
-                  <p style={{ fontSize:11, fontWeight:700, color:'#64748b', marginBottom:6,
-                    textTransform:'uppercase', letterSpacing:1 }}>Lokasyon</p>
-
-                  {/* Seçili lokasyon göster */}
+                  <p style={{ fontSize:11, fontWeight:700, color:'#64748b', marginBottom:6, textTransform:'uppercase', letterSpacing:1 }}>Lokasyon</p>
                   <div style={{ display:'flex', gap:8, marginBottom:8, alignItems:'center' }}>
-                    <div style={{ flex:1, background:'#fff', border:'1px solid #e2e8f0',
-                      borderRadius:8, padding:'8px 12px', fontSize:13, fontFamily:'monospace',
-                      color: manualLok ? '#1e293b' : '#94a3b8', fontWeight:600 }}>
+                    <div style={{ flex:1, background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, padding:'8px 12px',
+                      fontSize:13, fontFamily:'monospace', color: manualLok ? '#1e293b' : '#94a3b8', fontWeight:600 }}>
                       {manualLok || 'Lokasyon seçilmedi'}
                     </div>
                     <button onClick={()=>setShowLokPicker(p=>!p)}
-                      style={{ ...S.btn, padding:'8px 12px', fontSize:12,
-                        background:'#e2e8f0', color:'#475569' }}>
+                      style={{ ...S.btn, padding:'8px 12px', fontSize:12, background:'#e2e8f0', color:'#475569' }}>
                       {showLokPicker ? '▲ Kapat' : '▼ Seç'}
                     </button>
                     {manualLok && (
                       <button onClick={()=>setManualLok('')}
-                        style={{ ...S.btn, padding:'8px 10px', fontSize:12,
-                          background:'#fee2e2', color:'#ef4444' }}>✕</button>
+                        style={{ ...S.btn, padding:'8px 10px', fontSize:12, background:'#fee2e2', color:'#ef4444' }}>✕</button>
                     )}
                   </div>
-
-                  {/* Lokasyon picker */}
                   {showLokPicker && (
-                    <div style={{ background:'#fff', border:'1px solid #e2e8f0',
-                      borderRadius:10, padding:12, marginBottom:10 }}>
-                      {/* Koridor */}
+                    <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:12, marginBottom:10 }}>
                       <p style={{ fontSize:11, fontWeight:700, color:'#64748b', marginBottom:6 }}>KORİDOR</p>
                       <div style={{ display:'flex', gap:8, marginBottom:10 }}>
                         {['109','110'].map(k=>(
                           <button key={k} onClick={()=>{ setLokKoridor(k); setLokRaf(null); setLokKat(null); setManualLok(''); }}
-                            style={{ flex:1, border:'none', borderRadius:8, padding:'7px 0',
-                              fontSize:13, fontWeight:700, cursor:'pointer',
+                            style={{ flex:1, border:'none', borderRadius:8, padding:'7px 0', fontSize:13,
+                              fontWeight:700, cursor:'pointer',
                               background: lokKoridor===k?'#1e40af':'#f1f5f9',
                               color: lokKoridor===k?'#fff':'#475569' }}>
                             {k}
                           </button>
                         ))}
                       </div>
-                      {/* Raf */}
                       <p style={{ fontSize:11, fontWeight:700, color:'#64748b', marginBottom:6 }}>
                         RAF {lokRaf?`— ${lokRaf}`:`(${getRafRange(lokKoridor).start}-${getRafRange(lokKoridor).end})`}
                       </p>
-                      <div style={{ display:'grid', gridTemplateColumns:'repeat(8,1fr)',
-                        gap:4, maxHeight:160, overflowY:'auto', marginBottom:10 }}>
+                      <div style={{ display:'grid', gridTemplateColumns:'repeat(8,1fr)', gap:4, maxHeight:160, overflowY:'auto', marginBottom:10 }}>
                         {getRafList(lokKoridor).map(n=>(
-                          <button key={n} onClick={()=>{ setLokRaf(n); setLokKat(null);
-                            setManualLok(''); }}
-                            style={{ padding:'5px 0', border:'none', borderRadius:5,
-                              fontSize:11, fontWeight:600, cursor:'pointer',
+                          <button key={n} onClick={()=>{ setLokRaf(n); setLokKat(null); setManualLok(''); }}
+                            style={{ padding:'5px 0', border:'none', borderRadius:5, fontSize:11,
+                              fontWeight:600, cursor:'pointer',
                               background: lokRaf===n?'#1e40af':'#f1f5f9',
                               color: lokRaf===n?'#fff':'#475569' }}>
                             {n}
                           </button>
                         ))}
                       </div>
-                      {/* Kat */}
                       {lokRaf && (
                         <>
                           <p style={{ fontSize:11, fontWeight:700, color:'#64748b', marginBottom:6 }}>KAT</p>
@@ -919,11 +1026,10 @@ export default function Stok() {
                               <button key={k} onClick={()=>{
                                 setLokKat(k);
                                 const kod = `A${lokKoridor}S${String(lokRaf).padStart(3,'0')}${k}`;
-                                setManualLok(kod);
-                                setShowLokPicker(false);
+                                setManualLok(kod); setShowLokPicker(false);
                               }}
-                                style={{ flex:1, border:'none', borderRadius:8, padding:'7px 0',
-                                  fontSize:13, fontWeight:700, cursor:'pointer',
+                                style={{ flex:1, border:'none', borderRadius:8, padding:'7px 0', fontSize:13,
+                                  fontWeight:700, cursor:'pointer',
                                   background: lokKat===k?'#1e40af':'#f1f5f9',
                                   color: lokKat===k?'#fff':'#475569' }}>
                                 {k}
@@ -934,31 +1040,23 @@ export default function Stok() {
                       )}
                     </div>
                   )}
-
-                  {/* Mevcut lokasyon adetleri */}
                   {manualProd.byLocation && Object.keys(manualProd.byLocation).length>0 && (
-                    <div style={{ marginBottom:10, fontSize:11, color:'#64748b',
-                      background:'#fff', borderRadius:8, padding:'6px 10px',
-                      border:'1px solid #e2e8f0' }}>
-                      {Object.entries(manualProd.byLocation)
-                        .filter(([,m])=>m>0)
-                        .map(([l,m])=>(
-                          <span key={l} style={{ marginRight:10, cursor:'pointer',
-                            color: manualLok===l?'#1e40af':'#64748b',
-                            fontWeight: manualLok===l?700:400 }}
-                            onClick={()=>{ setManualLok(l); setShowLokPicker(false); }}>
-                            📍{l}: {m}
-                          </span>
-                        ))}
+                    <div style={{ marginBottom:10, fontSize:11, color:'#64748b', background:'#fff',
+                      borderRadius:8, padding:'6px 10px', border:'1px solid #e2e8f0' }}>
+                      {Object.entries(manualProd.byLocation).filter(([,m])=>m>0).map(([l,m])=>(
+                        <span key={l} style={{ marginRight:10, cursor:'pointer',
+                          color: manualLok===l?'#1e40af':'#64748b',
+                          fontWeight: manualLok===l?700:400 }}
+                          onClick={()=>{ setManualLok(l); setShowLokPicker(false); }}>
+                          📍{l}: {m}
+                        </span>
+                      ))}
                     </div>
                   )}
-
-                  {/* Miktar */}
                   <div style={{ display:'flex', gap:8 }}>
                     <input type="number" style={{ ...S.input, flex:1 }}
                       placeholder={manualTip==='giris'?'Eklenecek miktar':'Çıkarılacak miktar'}
-                      value={manualMiktar}
-                      onChange={e => setManualMiktar(e.target.value)} />
+                      value={manualMiktar} onChange={e => setManualMiktar(e.target.value)} />
                     <button onClick={addManualStock} disabled={manualLoading}
                       style={{ ...S.btn, flexShrink:0,
                         background: manualTip==='giris'?'#10b981':'#ef4444',
@@ -971,7 +1069,6 @@ export default function Stok() {
             </div>
           </>
         )}
-
       </div>
 
       {/* Adjust Modal */}
@@ -981,22 +1078,15 @@ export default function Stok() {
           <div style={{ background:'#fff', borderRadius:16, padding:24,
             width:'calc(100% - 48px)', maxWidth:360 }}>
             <p style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>Stok Düzelt</p>
-            <p style={{ fontSize:12, color:'#64748b', marginBottom:16 }}>
-              {adjustProd.urunAdi||adjustProd.ean}
-            </p>
+            <p style={{ fontSize:12, color:'#64748b', marginBottom:16 }}>{adjustProd.urunAdi||adjustProd.ean}</p>
             <input type="number" style={{ ...S.input, marginBottom:12 }}
-              placeholder="Yeni stok miktarı"
-              value={adjustMiktar}
+              placeholder="Yeni stok miktarı" value={adjustMiktar}
               onChange={e => setAdjustMiktar(e.target.value)} autoFocus />
             <div style={{ display:'flex', gap:10 }}>
               <button onClick={() => setAdjustProd(null)}
-                style={{ ...S.btn, flex:1, background:'#f1f5f9', color:'#64748b' }}>
-                İptal
-              </button>
+                style={{ ...S.btn, flex:1, background:'#f1f5f9', color:'#64748b' }}>İptal</button>
               <button onClick={saveAdjust}
-                style={{ ...S.btn, flex:1, background:'#1e40af', color:'#fff' }}>
-                Kaydet
-              </button>
+                style={{ ...S.btn, flex:1, background:'#1e40af', color:'#fff' }}>Kaydet</button>
             </div>
           </div>
         </div>
