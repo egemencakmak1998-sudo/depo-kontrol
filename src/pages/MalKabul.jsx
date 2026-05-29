@@ -11,6 +11,12 @@ const readMkDraft = (id) => { try { const r=localStorage.getItem(MK_KEY(id)); re
 const writeMkDraft = (id, data) => { try { localStorage.setItem(MK_KEY(id), JSON.stringify({...data, savedAt:Date.now()})); } catch {} };
 const clearMkDraft = (id) => { try { localStorage.removeItem(MK_KEY(id)); } catch {} };
 
+// Setup draft — referans dosyası yüklenince hemen kaydeder, session açılmadan da korunur
+const SETUP_KEY = 'depoKontrol:malKabul:setup';
+const readSetupDraft = () => { try { const r=localStorage.getItem(SETUP_KEY); return r?JSON.parse(r):null; } catch { return null; } };
+const writeSetupDraft = (data) => { try { localStorage.setItem(SETUP_KEY, JSON.stringify(data)); } catch {} };
+const clearSetupDraft = () => { try { localStorage.removeItem(SETUP_KEY); } catch {} };
+
 function Toast({ msg, type, onDone }) {
   const bg={success:'#10b981',error:'#ef4444',warning:'#f59e0b',info:'#3b82f6'};
   useEffect(()=>{const t=setTimeout(onDone,3500);return()=>clearTimeout(t);},[onDone]);
@@ -365,8 +371,8 @@ export default function MalKabul() {
   const [products, setProducts] = useState({});
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [mkTur, setMkTur] = useState('manuel');
-  const [mkRef, setMkRef] = useState([]);
+  const [mkTur, setMkTur] = useState(() => { const d=readSetupDraft(); return d?.mkTur||'manuel'; });
+  const [mkRef, setMkRef] = useState(() => { const d=readSetupDraft(); return d?.mkRef||[]; });
   const [mkEntries, setMkEntries] = useState([]);
   const [vasItems, setVasItems] = useState({});
   const [mkLokasyonlar, setMkLokasyonlar] = useState({});
@@ -388,6 +394,12 @@ export default function MalKabul() {
     }catch{}
   },[]);
   useEffect(()=>{loadSessions();},[loadSessions]);
+
+  // Referans dosyası ve tur değişince localStorage'a kaydet
+  useEffect(()=>{
+    if(mkRef.length>0) writeSetupDraft({mkTur, mkRef});
+    else if(mkTur!=='manuel') writeSetupDraft({mkTur, mkRef:[]});
+  },[mkRef, mkTur]);
 
   const parseMkRef = (file) => {
     const reader=new FileReader();
@@ -489,6 +501,7 @@ export default function MalKabul() {
       for(const vi of vasItemsToSave) await addDoc(collection(db,'vasItems'),vi);
       await updateDoc(doc(db,'countSessions',activeSession.id),{durum:'tamamlandi',bitis:now});
       clearMkDraft(activeSession.id);
+      clearSetupDraft();
       toast$('Mal kabul stoğa eklendi ✓','success');
       setView('list');setActiveSession(null);setMkEntries([]);setVasItems({});setMkLokasyonlar({});setMkRef([]);
       loadSessions();
@@ -548,7 +561,7 @@ export default function MalKabul() {
               {mkRef.length>0
                 ?<div style={{display:'flex',alignItems:'center',gap:10}}>
                   <p style={{fontSize:12,color:'#10b981',fontWeight:600,flex:1}}>✅ {mkRef.length} kalem yüklendi</p>
-                  <button onClick={()=>setMkRef([])} style={{...S.btn,background:'#fee2e2',color:'#ef4444',padding:'6px 12px',fontSize:12}}>Değiştir</button>
+                  <button onClick={()=>{setMkRef([]);clearSetupDraft();}} style={{...S.btn,background:'#fee2e2',color:'#ef4444',padding:'6px 12px',fontSize:12}}>Değiştir</button>
                 </div>
                 :<label style={{...S.btn,background:'#f1f5f9',color:'#475569',display:'inline-block',cursor:'pointer'}}>
                   📂 Dosya Seç
@@ -652,8 +665,25 @@ export default function MalKabul() {
         <button onClick={()=>{loadVasItems();setView('vas_liste');}} style={{...S.btn,background:'#7c3aed',color:'#fff',padding:'7px 12px',fontSize:12}}>🏷️ VAS Listesi</button>
       </div>
       <div style={{padding:16}}>
-        <button onClick={()=>{setActiveSession(null);setMkTur('manuel');setMkRef([]);setMkEntries([]);setVasItems({});setMkLokasyonlar({});setView('mal_kabul');}}
-          style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',marginBottom:16}}>📥 Yeni Mal Kabul Başlat</button>
+        {mkRef.length>0 && !activeSession ? (
+          <div style={{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:14,padding:'14px 16px',marginBottom:12}}>
+            <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:4}}>📋 Yüklenmiş Referans Var</p>
+            <p style={{fontSize:12,color:'#64748b',marginBottom:10}}>{mkRef.length} kalem · {mkTur==='referansli'?'Referanslı':'Manuel'} — henüz sayım başlatılmadı</p>
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={()=>setView('mal_kabul')}
+                style={{...S.btn,flex:1,background:'#1e40af',color:'#fff'}}>
+                Devam Et →
+              </button>
+              <button onClick={()=>{setMkRef([]);setMkTur('manuel');clearSetupDraft();}}
+                style={{...S.btn,background:'#fee2e2',color:'#ef4444',padding:'10px 12px'}}>
+                ✕ Sil
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button onClick={()=>{setActiveSession(null);setMkEntries([]);setVasItems({});setMkLokasyonlar({});setView('mal_kabul');}}
+            style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',marginBottom:16}}>📥 Yeni Mal Kabul Başlat</button>
+        )}
 
         {/* Aktif oturumlar — Devam Et */}
         {aktifler.length>0&&(
