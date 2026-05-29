@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { collection, addDoc, getDocs, doc, updateDoc,
-         query, where, orderBy, Timestamp, writeBatch } from 'firebase/firestore';
+         query, where, orderBy, Timestamp, writeBatch, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import * as XLSX from 'xlsx';
@@ -329,7 +329,7 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
           )}
         </div>
         <button onClick={undoLast} disabled={!scanHistory.length} style={{background:scanHistory.length?'#f59e0b':'#334155',border:'none',color:'#fff',padding:'7px 10px',borderRadius:10,fontWeight:700,fontSize:12,cursor:scanHistory.length?'pointer':'not-allowed',flexShrink:0}}>↩️</button>
-        <button onClick={handleTamamla} disabled={saving} style={{background:'linear-gradient(135deg,#10b981,#059669)',border:'none',color:'#fff',padding:'8px 12px',borderRadius:10,fontWeight:700,fontSize:12,cursor:'pointer',flexShrink:0,opacity:saving?.6:1}}>{saving?'...':'Tamamla'}</button>
+        <button onClick={handleTamamla} disabled={saving} style={{background:'linear-gradient(135deg,#10b981,#059669)',border:'none',color:'#fff',padding:'8px 12px',borderRadius:10,fontWeight:700,fontSize:12,cursor:'pointer',flexShrink:0,opacity:saving ? .6 : 1}}>{saving?'...':'Tamamla'}</button>
       </div>
 
       {/* Filtreler */}
@@ -419,7 +419,7 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
           const isEksik=eksikSet.has(key);
 
           return(
-            <div key={key} style={{background:st.card,border:`1px solid ${isEksik?'#94a3b8':st.border}`,borderRadius:14,padding:'11px 12px',marginBottom:7,opacity:isEksik?.7:1}}>
+            <div key={key} style={{background:st.card,border:`1px solid ${isEksik?'#94a3b8':st.border}`,borderRadius:14,padding:'11px 12px',marginBottom:7,opacity:isEksik ? .7 : 1}}>
               <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                 <div style={{width:8,height:8,borderRadius:'50%',flexShrink:0,background:st.dot}}/>
                 <div style={{flex:1,minWidth:120}}>
@@ -629,25 +629,71 @@ export default function MalKabul() {
       const batch=writeBatch(db);const movBatch=writeBatch(db);const vasItemsToSave=[];
 
       itemList.forEach(item=>{
-        if(!item.ean) return;
         // Eksik kabul edilen ürünler stoğa girilmez
         if(item.eksikKabul) return;
-        const vasAdet=vasItems[item.ean||item.malzemeKodu]||0;
-        const lokAdet=item.adet-vasAdet;
-        const prev=(stockMap[item.ean]?.miktar)||0;
-        const next=prev+item.adet;
+
+        const productMatch = products[item.ean] || products[item.malzemeKodu] || {};
+        const stockEan = item.ean || productMatch.ean || '';
+        if(!stockEan) return;
+
+        const key = item.ean || item.malzemeKodu;
+        const vasAdet=Math.min(item.adet, vasItems[key]||0);
+        const lokAdet=Math.max(0, item.adet-vasAdet);
         const lok=mkLokasyonlar[item.ean]||mkLokasyonlar[item.malzemeKodu]||'';
-        const prevByLok=stockMap[item.ean]?.byLocation||{};
+
+        // Sadece lokasyonu girilmiş ve VAS'a ayrılmayan adet stoğa girer.
+        // VAS'a ayrılan adet, etiketleme tamamlanıp VAS listesinde lokasyon girilince stoğa alınır.
+        const prev=(stockMap[stockEan]?.miktar)||0;
+        const next=prev+lokAdet;
+        const prevByLok=stockMap[stockEan]?.byLocation||{};
         const newByLok=lok&&lokAdet>0?{...prevByLok,[lok]:(prevByLok[lok]||0)+lokAdet}:prevByLok;
-        batch.set(doc(db,'stock',item.ean),{ean:item.ean,miktar:next,urunAdi:item.urunAdi||'',malzemeKodu:item.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
-        movBatch.set(doc(collection(db,'stockMovements')),{tarih:now,tip:'mal_kabul',ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',miktar:item.adet,oncekiMiktar:prev,sonrakiMiktar:next,hasarliAdet:item.hasarliAdet||0,vasAdet,lokAdet,kaynak:`mal_kabul:${activeSession.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
-        if(vasAdet>0) vasItemsToSave.push({ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',adet:vasAdet,sessionId:activeSession.id,durum:'etiketleme_bekliyor',tarih:now});
+
+        if(lokAdet>0){
+          batch.set(doc(db,'stock',stockEan),{
+            ean:stockEan,
+            miktar:next,
+            urunAdi:item.urunAdi||productMatch.urunAdi||'',
+            malzemeKodu:item.malzemeKodu||productMatch.malzemeKodu||'',
+            byLocation:newByLok,
+            sonGuncelleme:now
+          },{merge:true});
+
+          movBatch.set(doc(collection(db,'stockMovements')),{
+            tarih:now,
+            tip:'mal_kabul',
+            ean:stockEan,
+            malzemeKodu:item.malzemeKodu||productMatch.malzemeKodu||'',
+            urunAdi:item.urunAdi||productMatch.urunAdi||'',
+            miktar:lokAdet,
+            oncekiMiktar:prev,
+            sonrakiMiktar:next,
+            hasarliAdet:item.hasarliAdet||0,
+            vasAdet,
+            lokAdet,
+            lokasyon:lok,
+            kaynak:`mal_kabul:${activeSession.id}`,
+            yapan:profile?.name||user?.email||'',
+            yapanId:user?.uid||''
+          });
+        }
+
+        if(vasAdet>0) {
+          vasItemsToSave.push({
+            ean:stockEan,
+            malzemeKodu:item.malzemeKodu||productMatch.malzemeKodu||'',
+            urunAdi:item.urunAdi||productMatch.urunAdi||'',
+            adet:vasAdet,
+            sessionId:activeSession.id,
+            durum:'etiketleme_bekliyor',
+            tarih:now
+          });
+        }
       });
       await batch.commit();await movBatch.commit();
       for(const vi of vasItemsToSave) await addDoc(collection(db,'vasItems'),vi);
       await updateDoc(doc(db,'countSessions',activeSession.id),{durum:'tamamlandi',bitis:now});
       clearMkDraft(activeSession.id);clearSetupDraft();
-      toast$('Mal kabul stoğa eklendi ✓','success');
+      toast$('Mal kabul tamamlandı. VAS dışındaki ürünler stoğa eklendi ✓','success');
       setView('list');setActiveSession(null);setMkEntries([]);setVasItems({});setMkLokasyonlar({});setMkRef([]);setSessionAdi('');
       loadSessions();
     }catch(e){toast$('Hata: '+e.message,'error');}
@@ -669,13 +715,46 @@ export default function MalKabul() {
   },[]);
 
   const vasLokasyonaGonder=async(vasItem,lokasyon)=>{
-    if(!lokasyon){toast$('Lokasyon seçin','error');return;}
+    const lok=String(lokasyon||'').trim().toUpperCase();
+    if(!lok){toast$('Lokasyon seçin','error');return;}
+    if(!vasItem.ean){toast$('Bu VAS ürününde EAN yok, stoğa alınamaz','error');return;}
     try{
       const now=Timestamp.now();
-      await updateDoc(doc(db,'vasItems',vasItem.id),{durum:'tamamlandi',lokasyon,bitis:now});
-      await addDoc(collection(db,'stockMovements'),{tarih:now,tip:'vas_lokasyon',ean:vasItem.ean,malzemeKodu:vasItem.malzemeKodu||'',urunAdi:vasItem.urunAdi||'',miktar:0,lokasyon,kaynak:`vas:${vasItem.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
+      const stockRef=doc(db,'stock',vasItem.ean);
+      const stockSnap=await getDocs(query(collection(db,'stock'),where('ean','==',vasItem.ean)));
+      const currentDoc=stockSnap.empty?null:stockSnap.docs[0];
+      const prev=currentDoc?.data?.()?.miktar || 0;
+      const prevByLok=currentDoc?.data?.()?.byLocation || {};
+      const adet=Number(vasItem.adet||0);
+      const next=prev+adet;
+      const newByLok={...prevByLok,[lok]:(prevByLok[lok]||0)+adet};
+
+      await setDoc(stockRef,{
+        ean:vasItem.ean,
+        miktar:next,
+        urunAdi:vasItem.urunAdi||'',
+        malzemeKodu:vasItem.malzemeKodu||'',
+        byLocation:newByLok,
+        sonGuncelleme:now
+      },{merge:true});
+
+      await updateDoc(doc(db,'vasItems',vasItem.id),{durum:'tamamlandi',lokasyon:lok,bitis:now});
+      await addDoc(collection(db,'stockMovements'),{
+        tarih:now,
+        tip:'vas_stok_giris',
+        ean:vasItem.ean,
+        malzemeKodu:vasItem.malzemeKodu||'',
+        urunAdi:vasItem.urunAdi||'',
+        miktar:adet,
+        oncekiMiktar:prev,
+        sonrakiMiktar:next,
+        lokasyon:lok,
+        kaynak:`vas:${vasItem.id}`,
+        yapan:profile?.name||user?.email||'',
+        yapanId:user?.uid||''
+      });
       setVasList(prev=>prev.filter(v=>v.id!==vasItem.id));
-      toast$('VAS → Lokasyona taşındı ✓','success');
+      toast$('VAS etiketleme tamamlandı ve ürün stoğa alındı ✓','success');
     }catch(e){toast$('Hata: '+e.message,'error');}
   };
 
@@ -729,7 +808,7 @@ export default function MalKabul() {
               style={{width:'100%',padding:'10px 14px',borderRadius:10,border:'1px solid #e2e8f0',fontSize:14,outline:'none',boxSizing:'border-box'}}/>
           </div>
           <button onClick={startMalKabul} disabled={loading||(mkTur==='referansli'&&mkRef.length===0)}
-            style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',opacity:(mkTur==='referansli'&&mkRef.length===0)?.5:1}}>
+            style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',opacity:(mkTur==='referansli'&&mkRef.length===0) ? .5 : 1}}>
             {loading?'...':'Sayıma Başla →'}
           </button>
         </div>
@@ -806,7 +885,7 @@ export default function MalKabul() {
           )}
 
           <button onClick={()=>setView('mk_sayim')} style={{...S.btn,width:'100%',background:'#3b82f6',color:'#fff',marginBottom:10}}>➕ Daha Fazla Ürün Say</button>
-          {isAdmin&&<button onClick={malKabulOnayla} disabled={loading||itemList.length===0} style={{...S.btn,width:'100%',background:'#10b981',color:'#fff',opacity:loading?.6:1}}>{loading?'Ekleniyor...':'✅ Onayla ve Stoğa Ekle'}</button>}
+          {isAdmin&&<button onClick={malKabulOnayla} disabled={loading||itemList.length===0} style={{...S.btn,width:'100%',background:'#10b981',color:'#fff',opacity:loading ? .6 : 1}}>{loading?'Ekleniyor...':'✅ Onayla ve Stoğa Ekle'}</button>}
         </div>
       </div>
     );
@@ -932,13 +1011,21 @@ function VasCard({item,onSend}){
   const[lok,setLok]=useState('');const[showPicker,setShowPicker]=useState(false);
   return(
     <div style={{background:'#fff',padding:'14px 16px'}}>
-      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean}</p>
-      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>{item.malzemeKodu||item.ean} · {item.adet} adet</p>
+      <div style={{display:'flex',alignItems:'flex-start',gap:10,marginBottom:8}}>
+        <div style={{flex:1,minWidth:0}}>
+          <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.ean}</p>
+          <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace'}}>{item.malzemeKodu||'—'} · {item.ean||'EAN yok'} · {item.adet} adet</p>
+          <p style={{fontSize:11,color:'#7c3aed',fontWeight:600,marginTop:3}}>🏷️ Etiketleme bitince lokasyon girip stoğa alın</p>
+        </div>
+        <span style={{background:'#f5f3ff',color:'#7c3aed',border:'1px solid #ddd6fe',borderRadius:20,padding:'3px 8px',fontSize:11,fontWeight:700,whiteSpace:'nowrap'}}>
+          Stokta beklemiyor
+        </span>
+      </div>
       {!showPicker?(
         <div style={{display:'flex',gap:8}}>
-          <input value={lok} onChange={e=>setLok(e.target.value.toUpperCase())} placeholder="Lokasyon" style={{flex:1,padding:'8px 12px',border:'1px solid #e2e8f0',borderRadius:8,fontSize:13,outline:'none',fontFamily:'monospace'}}/>
+          <input value={lok} onChange={e=>setLok(e.target.value.toUpperCase())} placeholder="Lokasyon (örn: A109S013B)" style={{flex:1,padding:'8px 12px',border:'1px solid #e2e8f0',borderRadius:8,fontSize:13,outline:'none',fontFamily:'monospace'}}/>
           <button onClick={()=>setShowPicker(true)} style={{background:'#f1f5f9',border:'none',borderRadius:8,padding:'8px 10px',cursor:'pointer',fontSize:13}}>📍</button>
-          <button onClick={()=>onSend(item,lok)} disabled={!lok} style={{background:'#10b981',border:'none',borderRadius:8,color:'#fff',padding:'8px 14px',fontSize:13,fontWeight:600,cursor:'pointer',opacity:!lok?.5:1}}>Gönder ✓</button>
+          <button onClick={()=>onSend(item,lok)} disabled={!lok} style={{background:'#10b981',border:'none',borderRadius:8,color:'#fff',padding:'8px 14px',fontSize:13,fontWeight:600,cursor:'pointer',opacity:!lok ? .5 : 1,whiteSpace:'nowrap'}}>Stoğa Al ✓</button>
         </div>
       ):(
         <LokPicker onSelect={l=>{setLok(l);setShowPicker(false);}}/>
