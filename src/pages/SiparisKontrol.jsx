@@ -1,10 +1,37 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { collection, addDoc, getDocs, Timestamp, doc, updateDoc, deleteDoc, query, where, writeBatch, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import * as XLSX from 'xlsx';
 
 /* ── helpers ─────────────────────────────────────────── */
+/* Sipariş Kontrol taslaklarını tarayıcı kapanması / geri tuşu gibi durumlarda korumak için local yedek */
+const getOrderDraftKey = (orderId) => orderId ? `depoKontrol:siparisKontrol:${orderId}` : null;
+const readLocalOrderDraft = (orderId) => {
+  try {
+    const key = getOrderDraftKey(orderId);
+    if (!key) return null;
+    const raw = window.localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+const writeLocalOrderDraft = (orderId, data) => {
+  try {
+    const key = getOrderDraftKey(orderId);
+    if (!key) return;
+    window.localStorage.setItem(key, JSON.stringify({ ...data, localUpdatedAt: Date.now() }));
+  } catch {}
+};
+const clearLocalOrderDraft = (orderId) => {
+  try {
+    const key = getOrderDraftKey(orderId);
+    if (key) window.localStorage.removeItem(key);
+  } catch {}
+};
+const mergeCounts = (serverCounts = {}, localCounts = {}) => ({ ...(serverCounts || {}), ...(localCounts || {}) });
+
 function Toast({ msg, type, onDone }) {
   const bg = { success:'#10b981', error:'#ef4444', warning:'#f59e0b', info:'#3b82f6' };
 
@@ -298,7 +325,8 @@ function KoliModal({ onSave, onClose }) {
 function ScanSession({ items, irsaliyeInfo, orderId, initialCounts, onDone, onBack }) {
   const { user, profile } = useAuth();
 
-  const [counts, setCounts] = useState(initialCounts || {});
+  const localDraft = useMemo(() => readLocalOrderDraft(orderId), [orderId]);
+  const [counts, setCounts] = useState(() => mergeCounts(initialCounts || {}, localDraft?.counts || {}));
   const [scanHistory, setScanHistory] = useState([]);
   const [lastScan, setLastScan] = useState(null);
   const [mode, setMode] = useState('text');
@@ -310,9 +338,28 @@ function ScanSession({ items, irsaliyeInfo, orderId, initialCounts, onDone, onBa
   const [showKoli, setShowKoli] = useState(false);
   const [startTime] = useState(Date.now());
 
-  // Counts'u her zaman ref'te tut (unmount'ta erişmek için)
+  // Counts'u her zaman ref'te tut (unmount/tarayıcı kapanışında erişmek için)
   const countsRef = useRef(counts);
   useEffect(() => { countsRef.current = counts; }, [counts]);
+  const itemsRefForDraft = useRef(items);
+  const irsaliyeRefForDraft = useRef(irsaliyeInfo);
+  useEffect(() => { itemsRefForDraft.current = items; }, [items]);
+  useEffect(() => { irsaliyeRefForDraft.current = irsaliyeInfo; }, [irsaliyeInfo]);
+
+  const persistLocalDraft = useCallback((c = countsRef.current) => {
+    if (!orderId) return;
+    writeLocalOrderDraft(orderId, {
+      counts: c || {},
+      items: itemsRefForDraft.current || [],
+      irsaliyeInfo: irsaliyeRefForDraft.current || {},
+    });
+  }, [orderId]);
+
+  // Her değişiklikte local yedek al. Tarayıcı geri/kapanışta veri kaybolmasını engeller.
+  useEffect(() => {
+    if (!orderId) return;
+    persistLocalDraft(counts);
+  }, [counts, orderId, persistLocalDraft]);
 
   // Firestore'a anında kaydet
   const saveNow = useCallback(async (c) => {
@@ -331,17 +378,45 @@ function ScanSession({ items, irsaliyeInfo, orderId, initialCounts, onDone, onBa
     return () => clearTimeout(autoSaveTimer.current);
   }, [counts, orderId, saveNow]);
 
-  // Component kapanırken (geri/tamamla) anında kaydet
+  // Component kapanırken (uygulama içi geri/tamamla) anında kaydet
   useEffect(() => {
     return () => {
       if (!orderId) return;
       const c = countsRef.current;
+      persistLocalDraft(c);
       if (Object.keys(c).length > 0) {
         clearTimeout(autoSaveTimer.current);
         updateDoc(doc(db, 'orders', orderId), { counts: c, sonGuncelleme: Timestamp.now() }).catch(() => {});
       }
     };
-  }, [orderId]);
+  }, [orderId, persistLocalDraft]);
+
+  // Tarayıcı geri tuşu, sekme kapatma, mobil tarayıcı kapanışı gibi durumlarda local yedek kesin kalsın.
+  useEffect(() => {
+    if (!orderId) return;
+
+    const persistBeforeLeave = () => {
+      const c = countsRef.current || {};
+      persistLocalDraft(c);
+      if (Object.keys(c).length > 0) {
+        updateDoc(doc(db, 'orders', orderId), { counts: c, sonGuncelleme: Timestamp.now() }).catch(() => {});
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') persistBeforeLeave();
+    };
+
+    window.addEventListener('beforeunload', persistBeforeLeave);
+    window.addEventListener('pagehide', persistBeforeLeave);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      window.removeEventListener('beforeunload', persistBeforeLeave);
+      window.removeEventListener('pagehide', persistBeforeLeave);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [orderId, persistLocalDraft]);
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -679,6 +754,7 @@ function ScanSession({ items, irsaliyeInfo, orderId, initialCounts, onDone, onBa
         await movBatch.commit();
       } catch {}
 
+      clearLocalOrderDraft(orderId || finalId);
       toast$('Kontrol kaydedildi ✓', 'success');
       setTimeout(() => onDone(finalId), 1000);
     } catch (e) {
@@ -1341,7 +1417,16 @@ export default function SiparisKontrol({ navigate }) {
         await Promise.all(toDelete.map(d => deleteDoc(doc(db,'orders',d.id))));
         const active = snap.docs
           .filter(d => (d.data().sonGuncelleme?.toDate?.() || new Date(0)) >= cutoff)
-          .map(d => ({ id:d.id, ...d.data() }))
+          .map(d => {
+            const server = { id:d.id, ...d.data() };
+            const local = readLocalOrderDraft(d.id);
+            return {
+              ...server,
+              counts: mergeCounts(server.counts || {}, local?.counts || {}),
+              items: local?.items?.length ? local.items : (server.items || []),
+              _localRecovered: !!local,
+            };
+          })
           .sort((a,b) => (b.sonGuncelleme?.toDate?.() || 0) - (a.sonGuncelleme?.toDate?.() || 0));
         setDraftOrders(active);
       } catch(e) { console.error('Taslak yükleme hatası:', e); }
@@ -1702,10 +1787,11 @@ export default function SiparisKontrol({ navigate }) {
                           </button>
                           <button
                             onClick={async () => {
+                              const local = readLocalOrderDraft(order.id);
                               setOrderId(order.id);
-                              setInitialCounts(order.counts || {});
-                              setItems(order.items || []);
-                              setIrsal({ irsaliyeNo:order.irsaliyeNo||'', cariIsim:order.cariIsim||'' });
+                              setInitialCounts(mergeCounts(order.counts || {}, local?.counts || {}));
+                              setItems(local?.items?.length ? local.items : (order.items || []));
+                              setIrsal(local?.irsaliyeInfo || { irsaliyeNo:order.irsaliyeNo||'', cariIsim:order.cariIsim||'' });
                               setView('scan');
                             }}
                             style={{
@@ -1727,6 +1813,7 @@ export default function SiparisKontrol({ navigate }) {
                               if (!window.confirm(`"${order.cariIsim || order.irsaliyeNo || 'Bu sipariş'}" kontrolü silinecek. Emin misiniz?`)) return;
                               try {
                                 await deleteDoc(doc(db, 'orders', order.id));
+                                clearLocalOrderDraft(order.id);
                                 setDraftOrders(prev => prev.filter(o => o.id !== order.id));
                               } catch(e) { alert('Silinemedi: ' + e.message); }
                             }}
