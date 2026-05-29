@@ -1,13 +1,12 @@
 import { useAuth } from '../contexts/AuthContext.jsx';
 
 const NAV = [
-  { id:'dashboard', label:'Ana Sayfa',       icon:'🏠' },
-  { id:'siparis',   label:'Sipariş',         icon:'📋' },
-  { id:'iade',      label:'İade',            icon:'↩️' },
-  { id:'sayim',     label:'Sayım',           icon:'🔢' },
-  { id:'malkabul',  label:'Mal Kabul',       icon:'📥' },
-  { id:'raporlar',  label:'Raporlar',        icon:'📊' },
-  { id:'dosyaaraclari', label:'Dosya Araçları', icon:'🧩' },
+  { id:'dashboard', label:'Ana Sayfa',    icon:'🏠' },
+  { id:'siparis',   label:'Sipariş',      icon:'📋' },
+  { id:'iade',      label:'İade',         icon:'↩️' },
+  { id:'sayim',     label:'Sayım',        icon:'🔢' },
+  { id:'malkabul',  label:'Mal Kabul',    icon:'📥' },
+  { id:'raporlar',  label:'Raporlar',     icon:'📊' },
 ];
 
 const C = {
@@ -24,7 +23,7 @@ const C = {
   bottomNav: {
     position:'fixed', bottom:0, left:0, right:0, background:'#0f172a',
     display:'flex', zIndex:100, borderTop:'1px solid rgba(255,255,255,.08)',
-    paddingBottom:'env(safe-area-inset-bottom)', overflowX:'auto',
+    paddingBottom:'env(safe-area-inset-bottom)',
   },
   bottomItem: (active) => ({
     flex:1, padding:'8px 4px', display:'flex', flexDirection:'column', alignItems:'center',
@@ -47,7 +46,7 @@ export default function Layout({ page, navigate, profile, children }) {
           <p style={{ color:'#64748b', fontSize:11, marginTop:3 }}>{profile?.name}</p>
           <p style={{ color:'#475569', fontSize:10 }}>{isAdmin ? '👑 Yönetici' : '👤 Operatör'}</p>
         </div>
-        <nav style={{ flex:1, paddingTop:8, overflowY:'auto' }}>
+        <nav style={{ flex:1, paddingTop:8 }}>
           {navItems.map(n => (
             <button key={n.id} style={C.navItem(page===n.id)} onClick={() => navigate(n.id)}>
               <span style={{ fontSize:16 }}>{n.icon}</span> {n.label}
