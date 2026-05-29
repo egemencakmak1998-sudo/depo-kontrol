@@ -142,6 +142,7 @@ export default function Stok() {
   const [searchLoading, setSearchLoading] = useState(false);
   const searchTimer = useRef(null);
   const [searchCamOn, setSearchCamOn] = useState(false);
+  const [searchCamMsg, setSearchCamMsg] = useState('');
   const searchVideoRef = useRef(null);
   const searchStreamRef = useRef(null);
   const searchDetectorRef = useRef(null);
@@ -155,11 +156,16 @@ export default function Stok() {
     searchStreamRef.current = null;
     if (searchVideoRef.current) searchVideoRef.current.srcObject = null;
     searchLastRef.current = { code:'', emptySince:0 };
+    setSearchCamMsg('');
     setSearchCamOn(false);
   }, []);
 
   const scanSearchBarcode = useCallback(() => {
     if (!searchVideoRef.current || !searchDetectorRef.current) return;
+    if (searchVideoRef.current.readyState < 2) {
+      searchRafRef.current = requestAnimationFrame(scanSearchBarcode);
+      return;
+    }
     searchDetectorRef.current.detect(searchVideoRef.current).then(res => {
       const now = Date.now();
       if (!res.length) {
@@ -187,20 +193,50 @@ export default function Stok() {
 
   const startSearchCam = useCallback(async () => {
     try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        toast$('Bu cihazda kamera erişimi desteklenmiyor', 'warning');
+        return;
+      }
       if (!('BarcodeDetector' in window)) {
-        toast$('Kamera barkod tarama desteklenmiyor', 'warning');
+        toast$('Bu tarayıcı barkod taramayı desteklemiyor. Android Chrome veya masaüstü Chrome deneyin.', 'warning');
         return;
       }
       if (!searchDetectorRef.current) {
         searchDetectorRef.current = new window.BarcodeDetector({ formats:['ean_13','ean_8','code_128','code_39','upc_a','upc_e','qr_code'] });
       }
-      const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:'environment' } } });
-      searchStreamRef.current = stream;
-      if (searchVideoRef.current) {
-        searchVideoRef.current.srcObject = stream;
-        await searchVideoRef.current.play();
-      }
+
+      // Video elementi ekranda render edilsin diye önce paneli açıyoruz.
+      // Mobilde siyah ekranın ana sebebi, stream'in video ref oluşmadan bağlanmasıydı.
       setSearchCamOn(true);
+      setSearchCamMsg('Kamera açılıyor...');
+      await new Promise(resolve => setTimeout(resolve, 120));
+
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio:false,
+          video:{ facingMode:{ ideal:'environment' }, width:{ ideal:1280 }, height:{ ideal:720 } }
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ audio:false, video:true });
+      }
+
+      searchStreamRef.current = stream;
+      if (!searchVideoRef.current) throw new Error('Video alanı hazırlanamadı');
+
+      const video = searchVideoRef.current;
+      video.srcObject = stream;
+      video.muted = true;
+      video.setAttribute('playsinline', 'true');
+      video.setAttribute('webkit-playsinline', 'true');
+
+      await new Promise(resolve => {
+        video.onloadedmetadata = resolve;
+        setTimeout(resolve, 900);
+      });
+      await video.play();
+
+      setSearchCamMsg('Barkodu kameraya gösterin');
       searchRafRef.current = requestAnimationFrame(scanSearchBarcode);
     } catch (e) {
       toast$('Kamera açılamadı: ' + e.message, 'error');
@@ -649,8 +685,19 @@ export default function Stok() {
               </button>
             </div>
             {searchCamOn && (
-              <div style={{ marginTop:10, borderRadius:12, overflow:'hidden', background:'#000' }}>
-                <video ref={searchVideoRef} style={{ width:'100%', maxHeight:220, objectFit:'cover', display:'block' }} playsInline muted />
+              <div style={{ marginTop:10, borderRadius:12, overflow:'hidden', background:'#000', position:'relative' }}>
+                <video
+                  ref={searchVideoRef}
+                  style={{ width:'100%', height:'min(42vh,260px)', objectFit:'cover', display:'block', background:'#000' }}
+                  playsInline
+                  muted
+                  autoPlay
+                />
+                {searchCamMsg && (
+                  <div style={{ position:'absolute', left:10, top:10, background:'rgba(15,23,42,.75)', color:'#fff', borderRadius:8, padding:'5px 8px', fontSize:11, fontWeight:700 }}>
+                    {searchCamMsg}
+                  </div>
+                )}
                 <p style={{ fontSize:11, color:'#64748b', background:'#f8fafc', padding:'7px 10px' }}>
                   Barkod okutulunca arama otomatik yapılır. Aynı barkod kadrajda kaldığı sürece tekrar okunmaz.
                 </p>
