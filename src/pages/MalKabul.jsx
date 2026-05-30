@@ -1,18 +1,18 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { collection, addDoc, getDocs, doc, updateDoc,
+import { collection, addDoc, getDocs, doc, updateDoc, setDoc,
          query, where, orderBy, Timestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import * as XLSX from 'xlsx';
 
-/* ── localStorage helpers ── */
-const MK_KEY = (id) => `depoKontrol:malKabul:${id}`;
-const readMkDraft = (id) => { try { const r=localStorage.getItem(MK_KEY(id)); return r?JSON.parse(r):null; } catch { return null; } };
-const writeMkDraft = (id, data) => { try { localStorage.setItem(MK_KEY(id), JSON.stringify({...data,savedAt:Date.now()})); } catch {} };
-const clearMkDraft = (id) => { try { localStorage.removeItem(MK_KEY(id)); } catch {} };
+/* ── localStorage ── */
+const MK_KEY = id => `depoKontrol:malKabul:${id}`;
+const readMkDraft  = id => { try { const r=localStorage.getItem(MK_KEY(id)); return r?JSON.parse(r):null; } catch { return null; } };
+const writeMkDraft = (id,data) => { try { localStorage.setItem(MK_KEY(id),JSON.stringify({...data,savedAt:Date.now()})); } catch {} };
+const clearMkDraft = id => { try { localStorage.removeItem(MK_KEY(id)); } catch {} };
 const SETUP_KEY = 'depoKontrol:malKabul:setup';
-const readSetupDraft = () => { try { const r=localStorage.getItem(SETUP_KEY); return r?JSON.parse(r):null; } catch { return null; } };
-const writeSetupDraft = (data) => { try { localStorage.setItem(SETUP_KEY, JSON.stringify(data)); } catch {} };
+const readSetupDraft  = () => { try { const r=localStorage.getItem(SETUP_KEY); return r?JSON.parse(r):null; } catch { return null; } };
+const writeSetupDraft = data => { try { localStorage.setItem(SETUP_KEY,JSON.stringify(data)); } catch {} };
 const clearSetupDraft = () => { try { localStorage.removeItem(SETUP_KEY); } catch {} };
 
 function Toast({ msg, type, onDone }) {
@@ -51,42 +51,29 @@ function LokPicker({onSelect}){
   </div>);
 }
 
-/* ── TAMAMLA ONAY MODALI ── */
 function TamamlaModal({ stats, onConfirm, onCancel }) {
-  const { ok, partial, excess, pending, eksikCount } = stats;
-  const toplamEksik = partial - eksikCount;
-  const canComplete = toplamEksik === 0 && pending === 0;
-  return (
+  const toplamEksik=(stats.partial||0)-(stats.eksikCount||0);
+  const canComplete=toplamEksik===0&&(stats.pending||0)===0;
+  return(
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.6)',display:'flex',alignItems:'flex-end',justifyContent:'center',zIndex:300}}>
       <div style={{background:'#fff',borderRadius:'20px 20px 0 0',padding:24,width:'100%',maxWidth:500}}>
         <p style={{fontSize:17,fontWeight:700,color:'#0f172a',marginBottom:16}}>Mal Kabul Tamamla</p>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:16}}>
           <div style={{background:'#f0fdf4',borderRadius:10,padding:'10px 12px',border:'1px solid #bbf7d0'}}>
-            <p style={{fontSize:22,fontWeight:800,color:'#16a34a'}}>{ok+excess}</p>
+            <p style={{fontSize:22,fontWeight:800,color:'#16a34a'}}>{(stats.ok||0)+(stats.excess||0)}</p>
             <p style={{fontSize:12,color:'#15803d'}}>✅ Tam / Fazla — stoğa eklenecek</p>
           </div>
-          <div style={{background: eksikCount>0?'#fefce8':'#fff7ed',borderRadius:10,padding:'10px 12px',border:`1px solid ${eksikCount>0?'#fde047':'#fed7aa'}`}}>
-            <p style={{fontSize:22,fontWeight:800,color: eksikCount>0?'#ca8a04':'#ea580c'}}>{eksikCount}</p>
-            <p style={{fontSize:12,color: eksikCount>0?'#a16207':'#c2410c'}}>🔒 Eksik kabul — stoğa girmeyecek</p>
+          <div style={{background:(stats.eksikCount||0)>0?'#fefce8':'#fff7ed',borderRadius:10,padding:'10px 12px',border:`1px solid ${(stats.eksikCount||0)>0?'#fde047':'#fed7aa'}`}}>
+            <p style={{fontSize:22,fontWeight:800,color:(stats.eksikCount||0)>0?'#ca8a04':'#ea580c'}}>{stats.eksikCount||0}</p>
+            <p style={{fontSize:12,color:(stats.eksikCount||0)>0?'#a16207':'#c2410c'}}>🔒 Eksik kabul — stoğa girmeyecek</p>
           </div>
-          {toplamEksik > 0 && (
-            <div style={{background:'#fef2f2',borderRadius:10,padding:'10px 12px',border:'1px solid #fecaca',gridColumn:'1/-1'}}>
-              <p style={{fontSize:16,fontWeight:800,color:'#dc2626'}}>{toplamEksik} ürün hâlâ eksik sayılmış</p>
-              <p style={{fontSize:12,color:'#b91c1c'}}>⚠️ Tamamlamak için eksik ürünleri sayın veya "Eksik Kapat" yapın</p>
-            </div>
-          )}
-          {pending > 0 && (
-            <div style={{background:'#fef2f2',borderRadius:10,padding:'10px 12px',border:'1px solid #fecaca',gridColumn:'1/-1'}}>
-              <p style={{fontSize:16,fontWeight:800,color:'#dc2626'}}>{pending} ürün hiç taranmadı</p>
-              <p style={{fontSize:12,color:'#b91c1c'}}>⚠️ Hiç taranmamış ürünleri sayın veya "Eksik Kapat" yapın</p>
-            </div>
-          )}
+          {toplamEksik>0&&<div style={{background:'#fef2f2',borderRadius:10,padding:'10px 12px',border:'1px solid #fecaca',gridColumn:'1/-1'}}><p style={{fontSize:15,fontWeight:800,color:'#dc2626'}}>{toplamEksik} ürün hâlâ eksik sayılmış</p><p style={{fontSize:12,color:'#b91c1c'}}>⚠️ Sayın veya "Eksik Kapat" yapın</p></div>}
+          {(stats.pending||0)>0&&<div style={{background:'#fef2f2',borderRadius:10,padding:'10px 12px',border:'1px solid #fecaca',gridColumn:'1/-1'}}><p style={{fontSize:15,fontWeight:800,color:'#dc2626'}}>{stats.pending} ürün hiç taranmadı</p><p style={{fontSize:12,color:'#b91c1c'}}>⚠️ Sayın veya "Eksik Kapat" yapın</p></div>}
         </div>
         <div style={{display:'flex',gap:10}}>
           <button onClick={onCancel} style={{flex:1,padding:13,borderRadius:12,border:'2px solid #e2e8f0',background:'#fff',color:'#64748b',fontWeight:600,cursor:'pointer',fontSize:14}}>İptal</button>
-          <button onClick={onConfirm} disabled={!canComplete}
-            style={{flex:2,padding:13,borderRadius:12,border:'none',background:canComplete?'linear-gradient(135deg,#10b981,#059669)':'#e2e8f0',color:canComplete?'#fff':'#94a3b8',fontWeight:700,cursor:canComplete?'pointer':'not-allowed',fontSize:14}}>
-            {canComplete ? 'Onayla ve Tamamla ✓' : 'Önce Eksikleri Kapat'}
+          <button onClick={onConfirm} disabled={!canComplete} style={{flex:2,padding:13,borderRadius:12,border:'none',background:canComplete?'linear-gradient(135deg,#10b981,#059669)':'#e2e8f0',color:canComplete?'#fff':'#94a3b8',fontWeight:700,cursor:canComplete?'pointer':'not-allowed',fontSize:14}}>
+            {canComplete?'Onayla ve Tamamla ✓':'Önce Eksikleri Kapat'}
           </button>
         </div>
       </div>
@@ -103,92 +90,137 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
     id:`r${i}`,
     ean: String(r.ean||'').trim(),
     malzemeKodu: String(r.malzemeKodu||'').trim(),
-    urunAdi: r.urunAdi || products[String(r.ean||'').trim()]?.urunAdi || products[String(r.malzemeKodu||'').trim()]?.urunAdi || r.malzemeKodu || '',
-    beklenen: r.beklenenAdet || 0,
+    urunAdi: r.urunAdi||products[String(r.ean||'').trim()]?.urunAdi||products[String(r.malzemeKodu||'').trim()]?.urunAdi||r.malzemeKodu||'',
+    beklenen: r.beklenenAdet||0,
   })) : [];
 
+  /* ── Kalıcı başlangıç durumu: önce localStorage, sonra Firestore backup ── */
   const draft = readMkDraft(sessionId);
-
-  const [counts, setCounts] = useState(() => draft?.counts || {});
-  const [hasarlilar, setHasarlilar] = useState(() => draft?.hasarlilar || {});
-  const [vasSet, setVasSet] = useState(() => new Set(draft?.vasKeys || []));
-  const [eksikSet, setEksikSet] = useState(() => new Set(draft?.eksikKeys || []));
+  const [counts,     setCounts]     = useState(()=>draft?.counts||{});
+  const [hasarlilar, setHasarlilar] = useState(()=>draft?.hasarlilar||{});
+  const [vasSet,     setVasSet]     = useState(()=>new Set(draft?.vasKeys||[]));
+  const [eksikSet,   setEksikSet]   = useState(()=>new Set(draft?.eksikKeys||[]));
 
   const [scanHistory, setScanHistory] = useState([]);
-  const [lastScan, setLastScan] = useState(null);
-  const [mode, setMode] = useState('text');
-  const [barInput, setBarInput] = useState('');
-  const [camOn, setCamOn] = useState(false);
-  const [filter, setFilter] = useState('all');
-  const [toast, setToast] = useState(null);
-  const [showHasar, setShowHasar] = useState(false);
-  const [showTamamlaModal, setShowTamamlaModal] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [lastScan,    setLastScan]    = useState(null);
+  const [mode,        setMode]        = useState('text');
+  const [barInput,    setBarInput]    = useState('');
+  const [camOn,       setCamOn]       = useState(false);
+  const [filter,      setFilter]      = useState('all');
+  const [toast,       setToast]       = useState(null);
+  const [showHasar,   setShowHasar]   = useState(false);
+  const [showModal,   setShowModal]   = useState(false);
+  const [saving,      setSaving]      = useState(false);
 
-  const countsRef = useRef(counts);
-  const hasarlilarRef = useRef(hasarlilar);
-  const vasSetRef = useRef(vasSet);
-  const eksikSetRef = useRef(eksikSet);
-  useEffect(()=>{countsRef.current=counts;},[counts]);
-  useEffect(()=>{hasarlilarRef.current=hasarlilar;},[hasarlilar]);
-  useEffect(()=>{vasSetRef.current=vasSet;},[vasSet]);
-  useEffect(()=>{eksikSetRef.current=eksikSet;},[eksikSet]);
+  /* Her state değişiminde ref'leri ANINDA güncelle */
+  const countsRef    = useRef(counts);
+  const hasarliRef   = useRef(hasarlilar);
+  const vasRef       = useRef(vasSet);
+  const eksikRef     = useRef(eksikSet);
+  const sessionIdRef = useRef(sessionId);
+  const refItemsRef  = useRef(referenceItems);
 
-  const saveToLocal = useCallback(() => {
-    if(sessionId) writeMkDraft(sessionId, {
-      counts:countsRef.current,
-      hasarlilar:hasarlilarRef.current,
-      vasKeys:[...vasSetRef.current],
-      eksikKeys:[...eksikSetRef.current],
-      referenceItems
+  /* ── ANLIK KAYIT fonksiyonu — hem localStorage hem Firestore ── */
+  const persistNow = useCallback((c, h, v, e) => {
+    const sid = sessionIdRef.current;
+    if(!sid) return;
+    const data = {
+      counts:    c  ?? countsRef.current,
+      hasarlilar:h  ?? hasarliRef.current,
+      vasKeys:   [...(v ?? vasRef.current)],
+      eksikKeys: [...(e ?? eksikRef.current)],
+      referenceItems: refItemsRef.current,
+    };
+    writeMkDraft(sid, data);
+    /* Firestore'a da yaz (async, hata verirse önemli değil) */
+    updateDoc(doc(db,'countSessions',sid),{
+      draftCounts: data.counts,
+      draftHasarlilar: data.hasarlilar,
+      draftVasKeys: data.vasKeys,
+      draftEksikKeys: data.eksikKeys,
+      draftSavedAt: Date.now(),
+    }).catch(()=>{});
+  },[]);
+
+  /* ── Count setters: setState + ref + kayıt tek seferde ── */
+  const updateCounts = useCallback((updater) => {
+    setCounts(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      countsRef.current = next;
+      persistNow(next, null, null, null);
+      return next;
     });
+  },[persistNow]);
+
+  const updateVasSet = useCallback((updater) => {
+    setVasSet(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      vasRef.current = next;
+      persistNow(null, null, next, null);
+      return next;
+    });
+  },[persistNow]);
+
+  const updateEksikSet = useCallback((updater) => {
+    setEksikSet(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      eksikRef.current = next;
+      persistNow(null, null, null, next);
+      return next;
+    });
+  },[persistNow]);
+
+  const updateHasarlilar = useCallback((updater) => {
+    setHasarlilar(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      hasarliRef.current = next;
+      persistNow(null, next, null, null);
+      return next;
+    });
+  },[persistNow]);
+
+  /* Page hide / beforeunload garantisi */
+  useEffect(()=>{
+    sessionIdRef.current = sessionId;
+    refItemsRef.current = referenceItems;
   },[sessionId, referenceItems]);
 
-  // Auto-save on every change
-  const autoSaveTimer = useRef(null);
   useEffect(()=>{
-    if(!sessionId) return;
-    clearTimeout(autoSaveTimer.current);
-    autoSaveTimer.current = setTimeout(saveToLocal, 800);
-    return ()=>clearTimeout(autoSaveTimer.current);
-  },[counts, hasarlilar, vasSet, eksikSet, sessionId, saveToLocal]);
-
-  // Save on unmount & browser close
-  useEffect(()=>{
-    const persist = () => saveToLocal();
+    const persist = () => persistNow(null, null, null, null);
     window.addEventListener('beforeunload', persist);
     window.addEventListener('pagehide', persist);
     const onVis = () => { if(document.visibilityState==='hidden') persist(); };
     document.addEventListener('visibilitychange', onVis);
-    return ()=>{
-      persist();
+    return () => {
+      persist(); // unmount anında da kaydet
       window.removeEventListener('beforeunload', persist);
       window.removeEventListener('pagehide', persist);
       document.removeEventListener('visibilitychange', onVis);
     };
-  },[saveToLocal]);
+  },[persistNow]);
 
+  /* ── Kamera ── */
   const videoRef=useRef(null);const streamRef=useRef(null);const detRef=useRef(null);const rafRef=useRef(null);
-  const lastBcRef=useRef({code:'',ts:0});const lockedBcRef=useRef('');const noBcFrameRef=useRef(0);
+  const lockedBcRef=useRef('');const noBcFrameRef=useRef(0);
   const inputRef=useRef(null);const scanFnRef=useRef(null);
   const toast$=useCallback((msg,type='info')=>setToast({msg,type,id:Date.now()}),[]);
 
-  const findItem=useCallback((code)=>{
-    const c=String(code||'').trim(); if(!c) return null;
+  const getKey = item => item?.ean||item?.malzemeKodu||'';
+
+  const findItem = useCallback(code=>{
+    const c=String(code||'').trim();if(!c)return null;
     if(isRef) return items.find(i=>i.ean===c||i.malzemeKodu===c)||null;
     return products[c]||null;
   },[items,isRef,products]);
 
-  const getKey=(item)=>item?.ean||item?.malzemeKodu||'';
-
-  const processScan=useCallback((code)=>{
-    const c=String(code||'').trim(); if(!c) return;
+  const processScan = useCallback(code=>{
+    const c=String(code||'').trim();if(!c)return;
     const item=findItem(c);
     if(!item){toast$(`Bilinmeyen: ${c}`,'error');setLastScan({code:c,found:false});return;}
     const key=getKey(item);
-    // If marked eksik, remove from eksik set when scanned again
-    setEksikSet(prev=>{const n=new Set(prev);n.delete(key);return n;});
-    setCounts(prev=>{
+    // Eksik işaretini kaldır
+    updateEksikSet(prev=>{const n=new Set(prev);n.delete(key);return n;});
+    updateCounts(prev=>{
       const n=(prev[key]||0)+1;
       setScanHistory(h=>[...h,{key,code:c,item,previousCount:prev[key]||0}]);
       if(isRef){
@@ -199,7 +231,7 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
       setLastScan({code:c,found:true,item,n,expected:item.beklenen});
       return {...prev,[key]:n};
     });
-  },[findItem,isRef,toast$]);
+  },[findItem,isRef,toast$,updateCounts,updateEksikSet]);
 
   useEffect(()=>{scanFnRef.current=processScan;},[processScan]);
 
@@ -207,21 +239,28 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
     setScanHistory(prev=>{
       if(!prev.length){toast$('Geri alınacak yok','warning');return prev;}
       const last=prev[prev.length-1];
-      setCounts(c=>({...c,[last.key]:Math.max(0,(c[last.key]||0)-1)}));
+      updateCounts(c=>({...c,[last.key]:Math.max(0,(c[last.key]||0)-1)}));
       toast$(`↩️ Geri: ${last.item?.urunAdi||last.code}`,'info');
       return prev.slice(0,-1);
     });
-  },[toast$]);
+  },[toast$,updateCounts]);
+
+  const setManualCount=useCallback((item,val)=>{
+    const key=getKey(item);const n=Math.max(0,parseInt(String(val).replace(/\D/g,''),10)||0);
+    updateCounts(prev=>({...prev,[key]:n}));
+    if(n>=item.beklenen) updateEksikSet(prev=>{const ns=new Set(prev);ns.delete(key);return ns;});
+    setLastScan({code:key,found:true,item,n,expected:item.beklenen});
+  },[updateCounts,updateEksikSet]);
 
   const stopCam=useCallback(()=>{
     if(rafRef.current){cancelAnimationFrame(rafRef.current);rafRef.current=null;}
     if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;}
-    if(videoRef.current) videoRef.current.srcObject=null;
+    if(videoRef.current)videoRef.current.srcObject=null;
     lockedBcRef.current='';noBcFrameRef.current=0;setCamOn(false);
   },[]);
 
   const startCam=useCallback(async()=>{
-    if(streamRef.current) return;
+    if(streamRef.current)return;
     if(!('BarcodeDetector' in window)){toast$('Kamera desteklenmiyor','warning');setMode('text');return;}
     try{
       const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}});
@@ -231,11 +270,9 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
       setCamOn(true);
       const loop=async()=>{
         if(videoRef.current?.readyState>=2&&detRef.current){
-          try{
-            const res=await detRef.current.detect(videoRef.current);
+          try{const res=await detRef.current.detect(videoRef.current);
             if(!res.length){noBcFrameRef.current++;if(noBcFrameRef.current>=8)lockedBcRef.current='';}
-            else{noBcFrameRef.current=0;const bc=String(res[0].rawValue||'').trim();if(bc&&bc!==lockedBcRef.current){lockedBcRef.current=bc;scanFnRef.current?.(bc);}}
-          }catch{}
+            else{noBcFrameRef.current=0;const bc=String(res[0].rawValue||'').trim();if(bc&&bc!==lockedBcRef.current){lockedBcRef.current=bc;scanFnRef.current?.(bc);}}}catch{}
         }
         rafRef.current=requestAnimationFrame(loop);
       };
@@ -249,44 +286,28 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
   },[mode,startCam,stopCam]);
   useEffect(()=>()=>stopCam(),[stopCam]);
 
-  const setManualCount=useCallback((item,val)=>{
-    const key=getKey(item);const n=Math.max(0,parseInt(String(val).replace(/\D/g,''),10)||0);
-    setCounts(prev=>({...prev,[key]:n}));
-    if(n>=item.beklenen) setEksikSet(prev=>{const ns=new Set(prev);ns.delete(key);return ns;});
-    setLastScan({code:key,found:true,item,n,expected:item.beklenen});
-  },[]);
-
-  const getStatus=useCallback((item)=>{
+  const getStatus=useCallback(item=>{
     const key=getKey(item);const c=counts[key]||0;
-    if(!isRef) return c>0?'ok':'pending';
-    if(eksikSet.has(key)) return 'eksik';
-    if(c===0) return 'pending';if(c===item.beklenen) return 'ok';if(c<item.beklenen) return 'partial';return 'excess';
+    if(!isRef)return c>0?'ok':'pending';
+    if(eksikSet.has(key))return 'eksik';
+    if(c===0)return 'pending';if(c===item.beklenen)return 'ok';if(c<item.beklenen)return 'partial';return 'excess';
   },[counts,isRef,eksikSet]);
 
   const freeItems=!isRef?Object.entries(counts).filter(([,v])=>v>0).map(([key,adet])=>{
     const p=products[key]||{};return{id:key,ean:p.ean||key,malzemeKodu:p.malzemeKodu||'',urunAdi:p.urunAdi||key,beklenen:0,_adet:adet};
   }):[];
-
   const displayItems=isRef?items:freeItems;
-  const stats=isRef?items.reduce((a,item)=>{a[getStatus(item)]=(a[getStatus(item)]||0)+1;return a;},{pending:0,ok:0,partial:0,excess:0,eksik:0}):{ok:freeItems.length,pending:0,partial:0,excess:0,eksik:0};
-  stats.eksikCount = eksikSet.size;
+  const stats=isRef?items.reduce((a,item)=>{const s=getStatus(item);a[s]=(a[s]||0)+1;return a;},{pending:0,ok:0,partial:0,excess:0,eksik:0}):{ok:freeItems.length,pending:0,partial:0,excess:0,eksik:0};
+  stats.eksikCount=eksikSet.size;
   const totalScanned=isRef?items.reduce((a,i)=>a+(counts[getKey(i)]||0),0):freeItems.reduce((a,i)=>a+i._adet,0);
   const totalExpected=isRef?items.reduce((a,i)=>a+i.beklenen,0):0;
   const progress=isRef&&totalExpected?Math.min(100,Math.floor((totalScanned/totalExpected)*100)):0;
   const visible=filter==='all'?displayItems:filter==='eksik'?displayItems.filter(i=>eksikSet.has(getKey(i))):displayItems.filter(i=>getStatus(i)===filter);
 
-  const ST={
-    pending:{dot:'#94a3b8',cnt:'#94a3b8',card:'#fff',border:'#e2e8f0'},
-    ok:{dot:'#10b981',cnt:'#10b981',card:'#f0fdf4',border:'#86efac'},
-    partial:{dot:'#f59e0b',cnt:'#d97706',card:'#fffbeb',border:'#fde68a'},
-    excess:{dot:'#ef4444',cnt:'#dc2626',card:'#fef2f2',border:'#fecaca'},
-    eksik:{dot:'#64748b',cnt:'#64748b',card:'#f8fafc',border:'#cbd5e1'},
-  };
-
-  const handleTamamla = () => setShowTamamlaModal(true);
+  const ST={pending:{dot:'#94a3b8',cnt:'#94a3b8',card:'#fff',border:'#e2e8f0'},ok:{dot:'#10b981',cnt:'#10b981',card:'#f0fdf4',border:'#86efac'},partial:{dot:'#f59e0b',cnt:'#d97706',card:'#fffbeb',border:'#fde68a'},excess:{dot:'#ef4444',cnt:'#dc2626',card:'#fef2f2',border:'#fecaca'},eksik:{dot:'#94a3b8',cnt:'#94a3b8',card:'#f8fafc',border:'#cbd5e1'}};
 
   const handleDone=async()=>{
-    setShowTamamlaModal(false);
+    setShowModal(false);
     const total=isRef?totalScanned:freeItems.reduce((a,i)=>a+i._adet,0);
     if(total===0){toast$('Hiç ürün girilmedi','error');return;}
     setSaving(true);
@@ -301,7 +322,8 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
         eksikOzet:itemsToSave.filter(i=>i.eksikKabul).map(i=>({ean:i.ean,malzemeKodu:i.malzemeKodu,urunAdi:i.urunAdi,sayilan:i.adet,beklenen:i.beklenenAdet})),
         hasarliOzet:itemsToSave.filter(i=>i.hasarliAdet>0).map(i=>({ean:i.ean,adet:i.hasarliAdet,urunAdi:i.urunAdi})),
       });
-      await updateDoc(doc(db,'countSessions',sessionId),{lastCounts:counts,lastEntryId:ref.id,updatedAt:Timestamp.now()});
+      // Draft temizle
+      await updateDoc(doc(db,'countSessions',sessionId),{lastEntryId:ref.id,draftCounts:{},draftSavedAt:Date.now()});
       clearMkDraft(sessionId);
       onDone(ref.id, itemsToSave, [...vasSet]);
     }catch(e){toast$('Hata: '+e.message,'error');}
@@ -310,45 +332,35 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
 
   return(
     <div style={{height:'100dvh',display:'flex',flexDirection:'column',background:'#f1f5f9',overflow:'hidden'}}>
-      {/* Top bar */}
       <div style={{background:'#0f172a',padding:'10px 14px',display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
-        <button onClick={()=>{saveToLocal();onBack();}} style={{background:'rgba(255,255,255,.08)',border:'none',color:'#94a3b8',width:34,height:34,borderRadius:10,cursor:'pointer',fontSize:16,display:'flex',alignItems:'center',justifyContent:'center'}}>←</button>
+        <button onClick={()=>{persistNow();onBack();}} style={{background:'rgba(255,255,255,.08)',border:'none',color:'#94a3b8',width:34,height:34,borderRadius:10,cursor:'pointer',fontSize:16,display:'flex',alignItems:'center',justifyContent:'center'}}>←</button>
         <div style={{flex:1}}>
           {isRef?(
             <>
               <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
                 <span style={{color:'#e2e8f0',fontSize:12,fontWeight:600}}>{items.length} kalem · {totalScanned}/{totalExpected} adet</span>
-                <span style={{color:progress===100?'#10b981':'#94a3b8',fontSize:12,fontWeight:700,fontFamily:'monospace'}}>%{progress}</span>
+                <span style={{color:progress===100?'#10b981':'#94a3b8',fontSize:12,fontWeight:700}}>%{progress}</span>
               </div>
               <div style={{height:5,background:'rgba(255,255,255,.1)',borderRadius:4,overflow:'hidden'}}>
                 <div style={{height:'100%',borderRadius:4,transition:'width .35s',background:progress===100?'#10b981':'linear-gradient(90deg,#3b82f6,#6366f1)',width:`${progress}%`}}/>
               </div>
             </>
           ):(
-            <span style={{color:'#e2e8f0',fontSize:13,fontWeight:600}}>📥 Manuel Mal Kabul · {freeItems.reduce((a,i)=>a+i._adet,0)} adet</span>
+            <span style={{color:'#e2e8f0',fontSize:13,fontWeight:600}}>📥 Manuel · {freeItems.reduce((a,i)=>a+i._adet,0)} adet</span>
           )}
         </div>
         <button onClick={undoLast} disabled={!scanHistory.length} style={{background:scanHistory.length?'#f59e0b':'#334155',border:'none',color:'#fff',padding:'7px 10px',borderRadius:10,fontWeight:700,fontSize:12,cursor:scanHistory.length?'pointer':'not-allowed',flexShrink:0}}>↩️</button>
-        <button onClick={handleTamamla} disabled={saving} style={{background:'linear-gradient(135deg,#10b981,#059669)',border:'none',color:'#fff',padding:'8px 12px',borderRadius:10,fontWeight:700,fontSize:12,cursor:'pointer',flexShrink:0,opacity:saving?.6:1}}>{saving?'...':'Tamamla'}</button>
+        <button onClick={()=>setShowModal(true)} disabled={saving} style={{background:'linear-gradient(135deg,#10b981,#059669)',border:'none',color:'#fff',padding:'8px 12px',borderRadius:10,fontWeight:700,fontSize:12,cursor:'pointer',flexShrink:0}}>Tamamla</button>
       </div>
 
-      {/* Filtreler */}
       {isRef&&(
         <div style={{background:'#fff',borderBottom:'1px solid #e2e8f0',padding:'7px 10px',display:'flex',gap:5,overflowX:'auto',flexShrink:0}}>
-          {[
-            {key:'all',lbl:`Tümü ${items.length}`,bg:'#f1f5f9',clr:'#334155'},
-            {key:'ok',lbl:`✅ ${stats.ok||0}`,bg:'#dcfce7',clr:'#166534'},
-            {key:'partial',lbl:`⚠️ ${stats.partial||0}`,bg:'#fef3c7',clr:'#92400e'},
-            {key:'eksik',lbl:`🔒 ${stats.eksik||0}`,bg:'#f1f5f9',clr:'#64748b'},
-            {key:'excess',lbl:`❌ ${stats.excess||0}`,bg:'#fee2e2',clr:'#991b1b'},
-            {key:'pending',lbl:`⬜ ${stats.pending||0}`,bg:'#f1f5f9',clr:'#64748b'},
-          ].map(({key,lbl,bg,clr})=>(
+          {[{key:'all',lbl:`Tümü ${items.length}`,bg:'#f1f5f9',clr:'#334155'},{key:'ok',lbl:`✅ ${stats.ok||0}`,bg:'#dcfce7',clr:'#166634'},{key:'partial',lbl:`⚠️ ${stats.partial||0}`,bg:'#fef3c7',clr:'#92400e'},{key:'eksik',lbl:`🔒 ${stats.eksik||0}`,bg:'#f1f5f9',clr:'#64748b'},{key:'excess',lbl:`❌ ${stats.excess||0}`,bg:'#fee2e2',clr:'#991b1b'},{key:'pending',lbl:`⬜ ${stats.pending||0}`,bg:'#f1f5f9',clr:'#64748b'}].map(({key,lbl,bg,clr})=>(
             <button key={key} onClick={()=>setFilter(key)} style={{background:bg,color:clr,border:`2px solid ${filter===key?'#3b82f6':'transparent'}`,padding:'4px 9px',borderRadius:8,fontSize:11,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap',flexShrink:0}}>{lbl}</button>
           ))}
         </div>
       )}
 
-      {/* Mode tabs */}
       <div style={{display:'flex',borderBottom:'1px solid #f1f5f9',flexShrink:0}}>
         {[['camera','📷 Kamera'],['text','⌨️ Metin']].map(([id,lbl])=>(
           <button key={id} onClick={()=>setMode(id)} style={{flex:1,padding:'10px 0',fontSize:13,fontWeight:600,border:'none',cursor:'pointer',background:mode===id?'#0f172a':'#fff',color:mode===id?'#fff':'#64748b'}}>{lbl}</button>
@@ -379,7 +391,7 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
       )}
 
       {lastScan&&(
-        <div style={{margin:'0 10px 0',flexShrink:0,background:!lastScan.found?'#fef2f2':lastScan.n>lastScan.expected?'#fef2f2':lastScan.n===lastScan.expected?'#f0fdf4':'#fffbeb',border:`1px solid ${!lastScan.found?'#fecaca':lastScan.n>lastScan.expected?'#fecaca':lastScan.n===lastScan.expected?'#86efac':'#fde68a'}`,borderRadius:12,padding:'8px 12px',display:'flex',alignItems:'center',gap:10}}>
+        <div style={{margin:'0 10px',flexShrink:0,background:!lastScan.found?'#fef2f2':lastScan.n>lastScan.expected?'#fef2f2':lastScan.n===lastScan.expected?'#f0fdf4':'#fffbeb',border:`1px solid ${!lastScan.found?'#fecaca':lastScan.n>lastScan.expected?'#fecaca':lastScan.n===lastScan.expected?'#86efac':'#fde68a'}`,borderRadius:12,padding:'8px 12px',display:'flex',alignItems:'center',gap:10}}>
           <span style={{fontSize:18,flexShrink:0}}>{!lastScan.found?'❓':lastScan.n>lastScan.expected?'🔴':lastScan.n===lastScan.expected?'🟢':'🟡'}</span>
           <div style={{flex:1,minWidth:0}}>
             <p style={{fontSize:13,fontWeight:700,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{lastScan.item?.urunAdi||lastScan.code}</p>
@@ -398,7 +410,7 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
               return(<div key={idx} style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
                 <p style={{flex:1,fontSize:12,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi}</p>
                 <input type="number" min="0" max={sayilan} value={hasarlilar[key]||0}
-                  onChange={e=>setHasarlilar(prev=>({...prev,[key]:Math.min(sayilan,Math.max(0,parseInt(e.target.value)||0))}))}
+                  onChange={e=>updateHasarlilar(prev=>({...prev,[key]:Math.min(sayilan,Math.max(0,parseInt(e.target.value)||0))}))}
                   style={{width:52,textAlign:'center',border:'1px solid #fde68a',borderRadius:7,padding:'4px',fontSize:13,fontWeight:700,background:'#fff'}}/>
                 <span style={{fontSize:11,color:'#92400e'}}>/ {sayilan}</span>
               </div>);
@@ -409,29 +421,23 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
         {visible.length===0&&<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'24px 0'}}>Bu filtrede ürün yok</p>}
 
         {visible.map(item=>{
-          const key=getKey(item);
-          const cnt=counts[key]||item._adet||0;
-          const status=getStatus(item);
-          const st=ST[status]||ST.pending;
-          const hasar=hasarlilar[key]||0;
-          const pct=item.beklenen>0?Math.min(100,(cnt/item.beklenen)*100):0;
-          const isVas=vasSet.has(key);
-          const isEksik=eksikSet.has(key);
-
+          const key=getKey(item);const cnt=counts[key]||item._adet||0;
+          const status=getStatus(item);const st=ST[status]||ST.pending;
+          const hasar=hasarlilar[key]||0;const pct=item.beklenen>0?Math.min(100,(cnt/item.beklenen)*100):0;
+          const isVas=vasSet.has(key);const isEksik=eksikSet.has(key);
           return(
             <div key={key} style={{background:st.card,border:`1px solid ${isEksik?'#94a3b8':st.border}`,borderRadius:14,padding:'11px 12px',marginBottom:7,opacity:isEksik?.7:1}}>
               <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                 <div style={{width:8,height:8,borderRadius:'50%',flexShrink:0,background:st.dot}}/>
-                <div style={{flex:1,minWidth:120}}>
+                <div style={{flex:1,minWidth:100}}>
                   <p style={{fontSize:13,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||'—'}</p>
                   <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>
                     {item.malzemeKodu}{item.malzemeKodu?' · ':''}{item.ean}
                     {hasar>0&&<span style={{color:'#d97706',marginLeft:6}}>⚠️{hasar} hasarlı</span>}
                     {isVas&&<span style={{color:'#7c3aed',marginLeft:6}}>🏷️ VAS</span>}
-                    {isEksik&&<span style={{color:'#64748b',marginLeft:6}}>🔒 Eksik kabul</span>}
+                    {isEksik&&<span style={{color:'#64748b',marginLeft:6}}>🔒 Eksik</span>}
                   </p>
                 </div>
-                {/* Kontrol butonları */}
                 {!isEksik&&(
                   <div style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
                     <button onClick={()=>setManualCount(item,Math.max(0,cnt-1))} style={{width:28,height:28,borderRadius:8,border:'1px solid #cbd5e1',background:'#f8fafc',fontWeight:800,cursor:'pointer',fontSize:16,lineHeight:1}}>−</button>
@@ -440,27 +446,19 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
                     {isRef&&<span style={{fontSize:12,fontWeight:700,fontFamily:'monospace',color:'#94a3b8'}}>/{item.beklenen}</span>}
                     <button onClick={()=>setManualCount(item,cnt+1)} style={{width:28,height:28,borderRadius:8,border:'1px solid #cbd5e1',background:'#f8fafc',fontWeight:800,cursor:'pointer',fontSize:16,lineHeight:1}}>+</button>
                     {isRef&&cnt!==item.beklenen&&cnt>0&&<button onClick={()=>setManualCount(item,item.beklenen)} style={{height:28,padding:'0 6px',borderRadius:7,border:'1px solid #bfdbfe',background:'#eff6ff',color:'#2563eb',fontWeight:700,cursor:'pointer',fontSize:11,whiteSpace:'nowrap'}}>={item.beklenen}</button>}
-                    {/* VAS butonu */}
-                    <button onClick={()=>setVasSet(prev=>{const n=new Set(prev);n.has(key)?n.delete(key):n.add(key);return n;})}
-                      title="VAS Transfer"
-                      style={{height:28,width:28,borderRadius:7,border:`1px solid ${isVas?'#7c3aed':'#e2e8f0'}`,background:isVas?'#7c3aed':'#f8fafc',color:isVas?'#fff':'#94a3b8',fontWeight:700,cursor:'pointer',fontSize:12,flexShrink:0}}>
-                      🏷️
-                    </button>
+                    <button onClick={()=>updateVasSet(prev=>{const n=new Set(prev);n.has(key)?n.delete(key):n.add(key);return n;})} title="VAS Transfer"
+                      style={{height:28,width:28,borderRadius:7,border:`1px solid ${isVas?'#7c3aed':'#e2e8f0'}`,background:isVas?'#7c3aed':'#f8fafc',color:isVas?'#fff':'#94a3b8',fontWeight:700,cursor:'pointer',fontSize:12,flexShrink:0}}>🏷️</button>
                   </div>
                 )}
-                {/* Eksik Kapat butonu — sadece partial veya pending için */}
                 {isRef&&(status==='partial'||status==='pending')&&!isEksik&&(
-                  <button onClick={()=>setEksikSet(prev=>{const n=new Set(prev);n.add(key);return n;})}
+                  <button onClick={()=>updateEksikSet(prev=>{const n=new Set(prev);n.add(key);return n;})}
                     style={{height:28,padding:'0 8px',borderRadius:7,border:'1px solid #fca5a5',background:'#fff1f2',color:'#dc2626',fontWeight:600,cursor:'pointer',fontSize:11,whiteSpace:'nowrap',flexShrink:0}}>
                     🔒 Eksik Kapat
                   </button>
                 )}
-                {/* Eksik iptal */}
                 {isEksik&&(
-                  <button onClick={()=>setEksikSet(prev=>{const n=new Set(prev);n.delete(key);return n;})}
-                    style={{height:28,padding:'0 8px',borderRadius:7,border:'1px solid #cbd5e1',background:'#f1f5f9',color:'#64748b',fontWeight:600,cursor:'pointer',fontSize:11,whiteSpace:'nowrap',flexShrink:0}}>
-                    ↩ Aç
-                  </button>
+                  <button onClick={()=>updateEksikSet(prev=>{const n=new Set(prev);n.delete(key);return n;})}
+                    style={{height:28,padding:'0 8px',borderRadius:7,border:'1px solid #cbd5e1',background:'#f1f5f9',color:'#64748b',fontWeight:600,cursor:'pointer',fontSize:11,whiteSpace:'nowrap',flexShrink:0}}>↩ Aç</button>
                 )}
               </div>
               {isRef&&item.beklenen>1&&!isEksik&&(
@@ -473,14 +471,7 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
         })}
       </div>
 
-      {showTamamlaModal&&(
-        <TamamlaModal
-          stats={{ok:stats.ok||0,partial:stats.partial||0,excess:stats.excess||0,pending:stats.pending||0,eksikCount:eksikSet.size}}
-          onConfirm={handleDone}
-          onCancel={()=>setShowTamamlaModal(false)}
-        />
-      )}
-
+      {showModal&&<TamamlaModal stats={{ok:stats.ok||0,partial:stats.partial||0,excess:stats.excess||0,pending:stats.pending||0,eksikCount:eksikSet.size}} onConfirm={handleDone} onCancel={()=>setShowModal(false)}/>}
       {toast&&<Toast {...toast} onDone={()=>setToast(null)}/>}
     </div>
   );
@@ -491,19 +482,19 @@ export default function MalKabul() {
   const { user, profile } = useAuth();
   const isAdmin = profile?.role==='admin';
 
-  const [view, setView] = useState('list');
-  const [sessions, setSessions] = useState([]);
-  const [activeSession, setActiveSession] = useState(null);
-  const [products, setProducts] = useState({});
-  const [toast, setToast] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [sessionAdi, setSessionAdi] = useState(() => { const d=readSetupDraft(); return d?.sessionAdi||''; });
-  const [mkTur, setMkTur] = useState(() => { const d=readSetupDraft(); return d?.mkTur||'manuel'; });
-  const [mkRef, setMkRef] = useState(() => { const d=readSetupDraft(); return d?.mkRef||[]; });
-  const [mkEntries, setMkEntries] = useState([]);
-  const [vasItems, setVasItems] = useState({});
-  const [mkLokasyonlar, setMkLokasyonlar] = useState({});
-  const [vasList, setVasList] = useState([]);
+  const [view,         setView]         = useState('list');
+  const [sessions,     setSessions]     = useState([]);
+  const [activeSession,setActiveSession]= useState(null);
+  const [products,     setProducts]     = useState({});
+  const [toast,        setToast]        = useState(null);
+  const [loading,      setLoading]      = useState(false);
+  const [sessionAdi,   setSessionAdi]   = useState(()=>{ const d=readSetupDraft(); return d?.sessionAdi||''; });
+  const [mkTur,        setMkTur]        = useState(()=>{ const d=readSetupDraft(); return d?.mkTur||'manuel'; });
+  const [mkRef,        setMkRef]        = useState(()=>{ const d=readSetupDraft(); return d?.mkRef||[]; });
+  const [mkEntries,    setMkEntries]    = useState([]);
+  const [vasItems,     setVasItems]     = useState({});
+  const [mkLokasyonlar,setMkLokasyonlar]= useState({});
+  const [vasList,      setVasList]      = useState([]);
   const toast$ = (msg,type='info') => setToast({msg,type,id:Date.now()});
 
   useEffect(()=>{
@@ -514,11 +505,9 @@ export default function MalKabul() {
     });
   },[]);
 
-  const loadSessions = useCallback(async()=>{
-    try{
-      const snap=await getDocs(query(collection(db,'countSessions'),where('tip','==','mal_kabul'),orderBy('baslangic','desc')));
-      setSessions(snap.docs.map(d=>({id:d.id,...d.data()})));
-    }catch{}
+  const loadSessions=useCallback(async()=>{
+    try{const snap=await getDocs(query(collection(db,'countSessions'),where('tip','==','mal_kabul'),orderBy('baslangic','desc')));
+    setSessions(snap.docs.map(d=>({id:d.id,...d.data()})));}catch{}
   },[]);
   useEffect(()=>{loadSessions();},[loadSessions]);
 
@@ -527,7 +516,7 @@ export default function MalKabul() {
     else if(mkTur!=='manuel') writeSetupDraft({mkTur,mkRef:[],sessionAdi});
   },[mkRef,mkTur,sessionAdi]);
 
-  const parseMkRef = (file) => {
+  const parseMkRef=(file)=>{
     const reader=new FileReader();
     reader.onload=({target:{result}})=>{
       try{
@@ -550,7 +539,7 @@ export default function MalKabul() {
         rows.slice(hIdx+1).forEach(row=>{
           const kod=cCode>=0?String(row[cCode]||'').trim():'';
           const adet=parseInt(String(row[cAdet]||'0').replace(/\D/g,''))||0;
-          if(!kod||adet<=0) return;
+          if(!kod||adet<=0)return;
           refData.push({malzemeKodu:kod,urunAdi:cUrun>=0?String(row[cUrun]||'').trim():'',ean:cEan>=0?String(row[cEan]||'').trim():'',beklenenAdet:adet});
         });
         setMkRef(refData);
@@ -560,7 +549,7 @@ export default function MalKabul() {
     reader.readAsArrayBuffer(file);
   };
 
-  const startMalKabul = async() => {
+  const startMalKabul=async()=>{
     if(mkTur==='referansli'&&mkRef.length===0){toast$('Referans dosyası seçin','error');return;}
     setLoading(true);
     try{
@@ -569,55 +558,54 @@ export default function MalKabul() {
           tip:'mal_kabul',durum:'aktif',
           baslatan:profile?.name||user?.email||'',baslantanId:user?.uid||'',
           baslangic:Timestamp.now(),mkTur,sessionAdi:sessionAdi.trim()||'Mal Kabul',
-          referenceItems:mkTur==='referansli'?mkRef:[],
-          vasTransferItems:{},mkLokasyonlar:{}
+          referenceItems:mkTur==='referansli'?mkRef:[],vasTransferItems:{},mkLokasyonlar:{}
         });
         const s={id:ref.id,tip:'mal_kabul',durum:'aktif',baslatan:profile?.name||user?.email||'',baslangic:Timestamp.now(),mkTur,sessionAdi:sessionAdi.trim()||'Mal Kabul',referenceItems:mkTur==='referansli'?mkRef:[]};
         setActiveSession(s);setSessions(prev=>[s,...prev]);
       }
-      clearSetupDraft();
-      setView('mk_sayim');
+      clearSetupDraft();setView('mk_sayim');
     }catch(e){toast$('Hata: '+e.message,'error');}
     setLoading(false);
   };
 
-  const openSession = async(s) => {
+  /* openSession: Firestore draft da kontrol et */
+  const openSession=async(s)=>{
     setActiveSession(s);
     setMkTur(s.mkTur||'manuel');
     setMkRef(s.referenceItems||[]);
     setVasItems(s.vasTransferItems||{});
     setMkLokasyonlar(s.mkLokasyonlar||{});
+    // localStorage draft varsa kullan, yoksa Firestore draft
+    const lsDraft=readMkDraft(s.id);
+    if(!lsDraft&&s.draftCounts&&Object.keys(s.draftCounts).length>0){
+      writeMkDraft(s.id,{
+        counts:s.draftCounts,
+        hasarlilar:s.draftHasarlilar||{},
+        vasKeys:s.draftVasKeys||[],
+        eksikKeys:s.draftEksikKeys||[],
+        referenceItems:s.referenceItems||[],
+      });
+    }
     const snap=await getDocs(query(collection(db,'countEntries'),where('sessionId','==',s.id)));
     const entries=snap.docs.map(d=>({id:d.id,...d.data()}));
     setMkEntries(entries.map(e=>({id:e.id,items:e.items||[]})));
-    setView(entries.length>0?'mk_ozet':'mk_sayim');
+    // Eğer entry yoksa veya draft varsa → sayım ekranına git
+    const hasDraft=lsDraft&&Object.keys(lsDraft.counts||{}).length>0;
+    setView(entries.length>0&&!hasDraft?'mk_ozet':'mk_sayim');
   };
 
-  const handleSayimDone = (entryId, items, vasKeys=[]) => {
+  const handleSayimDone=(entryId,items,vasKeys=[])=>{
     setMkEntries(prev=>[...prev,{id:entryId,items}]);
     if(vasKeys.length>0){
-      setVasItems(prev=>{
-        const next={...prev};
-        items.forEach(item=>{
-          const key=item.ean||item.malzemeKodu;
-          if(vasKeys.includes(key)) next[key]=(next[key]||0)+item.adet;
-        });
-        return next;
-      });
+      setVasItems(prev=>{const next={...prev};items.forEach(item=>{const key=item.ean||item.malzemeKodu;if(vasKeys.includes(key))next[key]=(next[key]||0)+item.adet;});return next;});
     }
     setView('mk_ozet');
   };
 
-  const malKabulOnayla = async() => {
-    if(!activeSession) return;
+  const malKabulOnayla=async()=>{
+    if(!activeSession)return;
     const allItems={};
-    mkEntries.forEach(e=>{(e.items||[]).forEach(item=>{
-      const key=item.malzemeKodu||item.ean;
-      if(!allItems[key]) allItems[key]={...item,adet:0,hasarliAdet:0,eksikKabul:false};
-      allItems[key].adet+=item.adet;
-      allItems[key].hasarliAdet+=(item.hasarliAdet||0);
-      if(item.eksikKabul) allItems[key].eksikKabul=true;
-    });});
+    mkEntries.forEach(e=>{(e.items||[]).forEach(item=>{const key=item.malzemeKodu||item.ean;if(!allItems[key])allItems[key]={...item,adet:0,hasarliAdet:0,eksikKabul:false};allItems[key].adet+=item.adet;allItems[key].hasarliAdet+=(item.hasarliAdet||0);if(item.eksikKabul)allItems[key].eksikKabul=true;});});
     const itemList=Object.values(allItems);
     const missing=itemList.find(i=>!mkLokasyonlar[i.ean||i.malzemeKodu]&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet&&!i.eksikKabul);
     if(missing){toast$(`${missing.urunAdi||missing.malzemeKodu} için lokasyon girin`,'error');return;}
@@ -627,24 +615,23 @@ export default function MalKabul() {
       const stockSnap=await getDocs(collection(db,'stock'));
       const stockMap={};stockSnap.docs.forEach(d=>{stockMap[d.id]=d.data();});
       const batch=writeBatch(db);const movBatch=writeBatch(db);const vasItemsToSave=[];
-
       itemList.forEach(item=>{
-        if(!item.ean) return;
-        // Eksik kabul edilen ürünler stoğa girilmez
-        if(item.eksikKabul) return;
+        if(!item.ean)return;
+        if(item.eksikKabul)return; // eksik stoğa girmez
         const vasAdet=vasItems[item.ean||item.malzemeKodu]||0;
         const lokAdet=item.adet-vasAdet;
+        if(lokAdet<=0)return; // tamamı VAS'a gidiyorsa şimdi stoğa yazma
         const prev=(stockMap[item.ean]?.miktar)||0;
-        const next=prev+item.adet;
+        const next=prev+lokAdet;
         const lok=mkLokasyonlar[item.ean]||mkLokasyonlar[item.malzemeKodu]||'';
         const prevByLok=stockMap[item.ean]?.byLocation||{};
         const newByLok=lok&&lokAdet>0?{...prevByLok,[lok]:(prevByLok[lok]||0)+lokAdet}:prevByLok;
         batch.set(doc(db,'stock',item.ean),{ean:item.ean,miktar:next,urunAdi:item.urunAdi||'',malzemeKodu:item.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
-        movBatch.set(doc(collection(db,'stockMovements')),{tarih:now,tip:'mal_kabul',ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',miktar:item.adet,oncekiMiktar:prev,sonrakiMiktar:next,hasarliAdet:item.hasarliAdet||0,vasAdet,lokAdet,kaynak:`mal_kabul:${activeSession.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
-        if(vasAdet>0) vasItemsToSave.push({ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',adet:vasAdet,sessionId:activeSession.id,durum:'etiketleme_bekliyor',tarih:now});
+        movBatch.set(doc(collection(db,'stockMovements')),{tarih:now,tip:'mal_kabul',ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',miktar:lokAdet,oncekiMiktar:prev,sonrakiMiktar:next,hasarliAdet:item.hasarliAdet||0,vasAdet,lokAdet,kaynak:`mal_kabul:${activeSession.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
+        if(vasAdet>0)vasItemsToSave.push({ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',adet:vasAdet,sessionId:activeSession.id,durum:'etiketleme_bekliyor',tarih:now});
       });
       await batch.commit();await movBatch.commit();
-      for(const vi of vasItemsToSave) await addDoc(collection(db,'vasItems'),vi);
+      for(const vi of vasItemsToSave)await addDoc(collection(db,'vasItems'),vi);
       await updateDoc(doc(db,'countSessions',activeSession.id),{durum:'tamamlandi',bitis:now});
       clearMkDraft(activeSession.id);clearSetupDraft();
       toast$('Mal kabul stoğa eklendi ✓','success');
@@ -660,9 +647,8 @@ export default function MalKabul() {
     const sessionIds=[...new Set(items.map(i=>i.sessionId).filter(Boolean))];
     const sessionInfoMap={};
     await Promise.all(sessionIds.map(async sid=>{
-      try{
-        const sSnap=await getDocs(query(collection(db,'countSessions'),where('__name__','==',sid)));
-        if(!sSnap.empty){const s=sSnap.docs[0].data();sessionInfoMap[sid]={baslatan:s.baslatan||'',tarih:s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||'',mkTur:s.mkTur||'manuel'};}
+      try{const sSnap=await getDocs(query(collection(db,'countSessions'),where('__name__','==',sid)));
+        if(!sSnap.empty){const s=sSnap.docs[0].data();sessionInfoMap[sid]={baslatan:s.baslatan||'',tarih:s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||'',mkTur:s.mkTur||'manuel',sessionAdi:s.sessionAdi||''};}
       }catch{}
     }));
     setVasList(items.map(i=>({...i,_sessionInfo:sessionInfoMap[i.sessionId]||null})));
@@ -672,10 +658,16 @@ export default function MalKabul() {
     if(!lokasyon){toast$('Lokasyon seçin','error');return;}
     try{
       const now=Timestamp.now();
+      const stockSnap=await getDocs(query(collection(db,'stock'),where('ean','==',vasItem.ean)));
+      const prev=stockSnap.empty?0:(stockSnap.docs[0].data().miktar||0);
+      const prevByLok=stockSnap.empty?{}:(stockSnap.docs[0].data().byLocation||{});
+      const next=prev+vasItem.adet;
+      const newByLok={...prevByLok,[lokasyon]:(prevByLok[lokasyon]||0)+vasItem.adet};
+      await setDoc(doc(db,'stock',vasItem.ean),{ean:vasItem.ean,miktar:next,urunAdi:vasItem.urunAdi||'',malzemeKodu:vasItem.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
       await updateDoc(doc(db,'vasItems',vasItem.id),{durum:'tamamlandi',lokasyon,bitis:now});
-      await addDoc(collection(db,'stockMovements'),{tarih:now,tip:'vas_lokasyon',ean:vasItem.ean,malzemeKodu:vasItem.malzemeKodu||'',urunAdi:vasItem.urunAdi||'',miktar:0,lokasyon,kaynak:`vas:${vasItem.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
+      await addDoc(collection(db,'stockMovements'),{tarih:now,tip:'vas_lokasyon',ean:vasItem.ean,malzemeKodu:vasItem.malzemeKodu||'',urunAdi:vasItem.urunAdi||'',miktar:vasItem.adet,oncekiMiktar:prev,sonrakiMiktar:next,lokasyon,kaynak:`vas:${vasItem.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
       setVasList(prev=>prev.filter(v=>v.id!==vasItem.id));
-      toast$('VAS → Lokasyona taşındı ✓','success');
+      toast$(`${vasItem.urunAdi||vasItem.ean}: ${vasItem.adet} adet stoğa eklendi ✓`,'success');
     }catch(e){toast$('Hata: '+e.message,'error');}
   };
 
@@ -685,9 +677,7 @@ export default function MalKabul() {
     return <MalKabulSayimSession
       sessionId={activeSession.id}
       referenceItems={mkTur==='referansli'?mkRef:(activeSession.referenceItems||[])}
-      products={products}
-      onDone={handleSayimDone}
-      onBack={()=>setView('list')}/>;
+      products={products} onDone={handleSayimDone} onBack={()=>setView('list')}/>;
   }
 
   if(view==='mal_kabul'){
@@ -709,7 +699,6 @@ export default function MalKabul() {
           {mkTur==='referansli'&&(
             <div style={S.card}>
               <p style={{fontSize:13,fontWeight:700,marginBottom:4}}>Referans Dosyası</p>
-              <p style={{fontSize:11,color:'#64748b',marginBottom:10}}>Satın alma listesi — malzeme kodu + adet</p>
               {mkRef.length>0
                 ?<div style={{display:'flex',alignItems:'center',gap:10}}>
                   <p style={{fontSize:12,color:'#10b981',fontWeight:600,flex:1}}>✅ {mkRef.length} kalem yüklendi</p>
@@ -724,8 +713,7 @@ export default function MalKabul() {
           )}
           <div style={S.card}>
             <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:6}}>Oturum Adı <span style={{fontSize:11,color:'#94a3b8',fontWeight:400}}>(opsiyonel)</span></p>
-            <input value={sessionAdi} onChange={e=>setSessionAdi(e.target.value)}
-              placeholder="Örn: GHD Mayıs Sevkiyatı, Wella Lot 42..."
+            <input value={sessionAdi} onChange={e=>setSessionAdi(e.target.value)} placeholder="Örn: GHD Mayıs, Wella Lot 42..."
               style={{width:'100%',padding:'10px 14px',borderRadius:10,border:'1px solid #e2e8f0',fontSize:14,outline:'none',boxSizing:'border-box'}}/>
           </div>
           <button onClick={startMalKabul} disabled={loading||(mkTur==='referansli'&&mkRef.length===0)}
@@ -759,10 +747,9 @@ export default function MalKabul() {
             {tamEslesen&&<p style={{fontSize:12,color:'#10b981',marginTop:4,fontWeight:600}}>✅ Referans ile tam eşleşme</p>}
             {mkRef.length>0&&!tamEslesen&&<p style={{fontSize:12,color:'#d97706',marginTop:4,fontWeight:600}}>⚠️ Referans ile fark var</p>}
           </div>
-
           {eksikItems.length>0&&(
             <div style={{...S.card,border:'1px solid #fca5a5',background:'#fff1f2'}}>
-              <p style={{fontSize:12,fontWeight:700,color:'#dc2626',marginBottom:8}}>🔒 Eksik Kabul Edilen — Stoğa Girmeyecek</p>
+              <p style={{fontSize:12,fontWeight:700,color:'#dc2626',marginBottom:8}}>🔒 Eksik Kabul — Stoğa Girmeyecek</p>
               {eksikItems.map((item,i)=>(
                 <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 0',borderBottom:'1px solid #fecaca'}}>
                   <div style={{flex:1}}><p style={{fontSize:12,fontWeight:600,color:'#1e293b'}}>{item.urunAdi||item.malzemeKodu}</p></div>
@@ -771,7 +758,6 @@ export default function MalKabul() {
               ))}
             </div>
           )}
-
           {itemList.filter(i=>!i.eksikKabul).length>0&&(
             <div style={S.card}>
               <p style={{fontSize:13,fontWeight:700,marginBottom:4}}>🏷️ VAS Transfer</p>
@@ -779,13 +765,12 @@ export default function MalKabul() {
               {itemList.filter(i=>!i.eksikKabul).map((item,i)=>{
                 const key=item.ean||item.malzemeKodu;const sel=(vasItems[key]||0)>=item.adet;
                 return(<div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:'1px solid #f1f5f9'}}>
-                  <div style={{flex:1,minWidth:0}}><p style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p><p style={{fontSize:10,color:'#94a3b8'}}>{item.adet} adet{item.hasarliAdet>0?` · ⚠️${item.hasarliAdet} hasarlı`:''}{sel?' · 🏷️ VAS seçili':''}</p></div>
+                  <div style={{flex:1,minWidth:0}}><p style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p><p style={{fontSize:10,color:'#94a3b8'}}>{item.adet} adet{sel?' · 🏷️ VAS':''}</p></div>
                   <button onClick={()=>setVasItems(prev=>({...prev,[key]:sel?0:item.adet}))} style={{...S.btn,background:sel?'#7c3aed':'#f1f5f9',color:sel?'#fff':'#475569',padding:'6px 10px',fontSize:12}}>{sel?'↩ İptal':'VAS →'}</button>
                 </div>);
               })}
             </div>
           )}
-
           {itemList.filter(i=>!i.eksikKabul&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet).length>0&&(
             <div style={S.card}>
               <p style={{fontSize:13,fontWeight:700,marginBottom:4}}>📍 Lokasyon Ata</p>
@@ -804,7 +789,6 @@ export default function MalKabul() {
               ))}
             </div>
           )}
-
           <button onClick={()=>setView('mk_sayim')} style={{...S.btn,width:'100%',background:'#3b82f6',color:'#fff',marginBottom:10}}>➕ Daha Fazla Ürün Say</button>
           {isAdmin&&<button onClick={malKabulOnayla} disabled={loading||itemList.length===0} style={{...S.btn,width:'100%',background:'#10b981',color:'#fff',opacity:loading?.6:1}}>{loading?'Ekleniyor...':'✅ Onayla ve Stoğa Ekle'}</button>}
         </div>
@@ -814,34 +798,22 @@ export default function MalKabul() {
 
   if(view==='vas_liste'){
     const vasGroups={};
-    vasList.forEach(item=>{
-      const sid=item.sessionId||'bilinmiyor';
-      if(!vasGroups[sid]) vasGroups[sid]={sessionInfo:item._sessionInfo,items:[]};
-      vasGroups[sid].items.push(item);
-    });
+    vasList.forEach(item=>{const sid=item.sessionId||'bilinmiyor';if(!vasGroups[sid])vasGroups[sid]={sessionInfo:item._sessionInfo,items:[]};vasGroups[sid].items.push(item);});
     return(
       <div>
         <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
           <button onClick={()=>setView('list')} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
-          <div style={{flex:1}}>
-            <p style={{color:'#fff',fontWeight:700,fontSize:14}}>🏷️ VAS — Etiketleme Bekleyenler</p>
-            <p style={{color:'#94a3b8',fontSize:11}}>{vasList.length} ürün · {Object.keys(vasGroups).length} mal kabul</p>
-          </div>
+          <div style={{flex:1}}><p style={{color:'#fff',fontWeight:700,fontSize:14}}>🏷️ VAS — Etiketleme Bekleyenler</p><p style={{color:'#94a3b8',fontSize:11}}>{vasList.length} ürün · {Object.keys(vasGroups).length} mal kabul</p></div>
           <button onClick={loadVasItems} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:12}}>↻</button>
         </div>
         <div style={{padding:16}}>
-          {vasList.length===0&&(
-            <div style={{textAlign:'center',padding:'48px 0',color:'#94a3b8'}}>
-              <p style={{fontSize:28,marginBottom:8}}>🏷️</p>
-              <p style={{fontSize:14,fontWeight:600}}>VAS'ta bekleyen ürün yok</p>
-            </div>
-          )}
+          {vasList.length===0&&<div style={{textAlign:'center',padding:'48px 0',color:'#94a3b8'}}><p style={{fontSize:28,marginBottom:8}}>🏷️</p><p style={{fontSize:14,fontWeight:600}}>VAS'ta bekleyen ürün yok</p></div>}
           {Object.entries(vasGroups).map(([sid,group])=>(
             <div key={sid} style={{marginBottom:20}}>
               <div style={{background:'#7c3aed',borderRadius:'12px 12px 0 0',padding:'10px 14px',display:'flex',alignItems:'center',gap:10}}>
                 <div style={{flex:1}}>
                   <p style={{color:'#fff',fontWeight:700,fontSize:13}}>📥 {group.sessionInfo?.sessionAdi||'Mal Kabul'} — {group.sessionInfo?.tarih||'Tarih bilinmiyor'}</p>
-                  <p style={{color:'rgba(255,255,255,.7)',fontSize:11}}>{group.sessionInfo?.baslatan||'Kullanıcı bilinmiyor'} · {group.sessionInfo?.mkTur==='referansli'?'Referanslı':'Manuel'} · {group.items.length} ürün</p>
+                  <p style={{color:'rgba(255,255,255,.7)',fontSize:11}}>{group.sessionInfo?.baslatan||''} · {group.sessionInfo?.mkTur==='referansli'?'Referanslı':'Manuel'} · {group.items.length} ürün</p>
                 </div>
                 <span style={{background:'rgba(255,255,255,.2)',color:'#fff',borderRadius:20,padding:'3px 10px',fontSize:11,fontWeight:700}}>{group.items.length} kalem</span>
               </div>
@@ -874,53 +846,53 @@ export default function MalKabul() {
             <p style={{fontSize:12,color:'#64748b',marginBottom:10}}>{mkRef.length} kalem · {mkTur==='referansli'?'Referanslı':'Manuel'} — henüz sayım başlatılmadı</p>
             <div style={{display:'flex',gap:8}}>
               <button onClick={()=>setView('mal_kabul')} style={{...S.btn,flex:1,background:'#1e40af',color:'#fff'}}>Devam Et →</button>
-              <button onClick={()=>{setMkRef([]);setMkTur('manuel');clearSetupDraft();}} style={{...S.btn,background:'#fee2e2',color:'#ef4444',padding:'10px 12px'}}>✕ Sil</button>
+              <button onClick={()=>{setMkRef([]);setMkTur('manuel');setSessionAdi('');clearSetupDraft();}} style={{...S.btn,background:'#fee2e2',color:'#ef4444',padding:'10px 12px'}}>✕ Sil</button>
             </div>
           </div>
         )}
         <button onClick={()=>{setActiveSession(null);setMkEntries([]);setVasItems({});setMkLokasyonlar({});if(mkRef.length===0)setMkTur('manuel');setView('mal_kabul');}}
           style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',marginBottom:16}}>📥 Yeni Mal Kabul Başlat</button>
 
-        {aktifler.length>0&&(
-          <>
-            <p style={{fontSize:12,fontWeight:700,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:8}}>⏸ Devam Eden Mal Kabuller</p>
-            {aktifler.map(s=>{
-              const draft=readMkDraft(s.id);
-              const draftCounts=draft?.counts||{};
-              const refItems=s.referenceItems||[];
-              const scanned=refItems.reduce((a,r)=>{const key=String(r.ean||r.malzemeKodu||'').trim();return a+(draftCounts[key]||0);},0);
-              const total=refItems.reduce((a,r)=>a+(r.beklenenAdet||0),0);
-              const pct=total?Math.min(100,Math.floor(scanned/total*100)):0;
-              const tarih=s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||'';
-              return(
-                <div key={s.id} style={{...S.card,border:'1px solid #bfdbfe',background:'#eff6ff'}}>
-                  <div style={{display:'flex',flexDirection:'column',gap:8}}>
-                    <div>
-                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:2}}>
-                        <p style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>📥 {s.sessionAdi||( s.mkTur==='referansli'?'Referanslı':'Manuel')+' Mal Kabul'}</p>
+        {aktifler.length>0&&<>
+          <p style={{fontSize:12,fontWeight:700,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:8}}>⏸ Devam Eden Mal Kabuller</p>
+          {aktifler.map(s=>{
+            const draft=readMkDraft(s.id);
+            const draftCounts=draft?.counts||s.draftCounts||{};
+            const refItems=s.referenceItems||[];
+            const scanned=refItems.reduce((a,r)=>{const key=String(r.ean||r.malzemeKodu||'').trim();return a+(draftCounts[key]||0);},0);
+            const total=refItems.reduce((a,r)=>a+(r.beklenenAdet||0),0);
+            const pct=total?Math.min(100,Math.floor(scanned/total*100)):0;
+            const tarih=s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||'';
+            const hasDraft=Object.keys(draftCounts).length>0;
+            return(
+              <div key={s.id} style={{...S.card,border:'1px solid #bfdbfe',background:'#eff6ff'}}>
+                <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                  <div>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:2}}>
+                      <p style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>📥 {s.sessionAdi||( s.mkTur==='referansli'?'Referanslı':'Manuel')+' Mal Kabul'}</p>
+                      <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                        {hasDraft&&<span style={{background:'#fef3c7',color:'#d97706',borderRadius:6,padding:'2px 7px',fontSize:10,fontWeight:700}}>💾 Kaydedildi</span>}
                         {refItems.length>0&&<span style={{fontSize:11,color:'#1d4ed8',fontWeight:600}}>%{pct}</span>}
                       </div>
-                      <p style={{fontSize:11,color:'#64748b'}}>{s.baslatan} · {tarih}{refItems.length>0?` · ${refItems.length} kalem`:''}</p>
-                      {refItems.length>0&&<div style={{marginTop:6,height:4,background:'#bfdbfe',borderRadius:2,overflow:'hidden'}}><div style={{height:'100%',width:`${pct}%`,background:'#1e40af',borderRadius:2,transition:'width .3s'}}/></div>}
                     </div>
-                    <button onClick={()=>openSession(s)} style={{...S.btn,background:'#1e40af',color:'#fff',padding:'9px 0',fontSize:13}}>Devam Et →</button>
+                    <p style={{fontSize:11,color:'#64748b'}}>{s.baslatan} · {tarih}{refItems.length>0?` · ${refItems.length} kalem`:''}</p>
+                    {refItems.length>0&&<div style={{marginTop:6,height:4,background:'#bfdbfe',borderRadius:2,overflow:'hidden'}}><div style={{height:'100%',width:`${pct}%`,background:'#1e40af',borderRadius:2}}/></div>}
                   </div>
+                  <button onClick={()=>openSession(s)} style={{...S.btn,background:'#1e40af',color:'#fff',padding:'9px 0',fontSize:13}}>Devam Et →</button>
                 </div>
-              );
-            })}
-          </>
-        )}
-        {bitmisler.length>0&&(
-          <>
-            <p style={{fontSize:12,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:8,marginTop:16}}>Tamamlanan</p>
-            {bitmisler.slice(0,10).map(s=>(
-              <div key={s.id} style={S.card}>
-                <p style={{fontSize:13,fontWeight:600,color:'#475569'}}>📥 {s.sessionAdi||( s.mkTur==='referansli'?'Referanslı':'Manuel')+' Mal Kabul'}</p>
-                <p style={{fontSize:11,color:'#94a3b8'}}>{s.baslatan} · {s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||''}</p>
               </div>
-            ))}
-          </>
-        )}
+            );
+          })}
+        </>}
+        {bitmisler.length>0&&<>
+          <p style={{fontSize:12,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:8,marginTop:16}}>Tamamlanan</p>
+          {bitmisler.slice(0,10).map(s=>(
+            <div key={s.id} style={S.card}>
+              <p style={{fontSize:13,fontWeight:600,color:'#475569'}}>📥 {s.sessionAdi||( s.mkTur==='referansli'?'Referanslı':'Manuel')+' Mal Kabul'}</p>
+              <p style={{fontSize:11,color:'#94a3b8'}}>{s.baslatan} · {s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||''}</p>
+            </div>
+          ))}
+        </>}
         {sessions.length===0&&!loading&&<div style={{textAlign:'center',padding:'48px 0',color:'#94a3b8'}}><p style={{fontSize:32,marginBottom:8}}>📥</p><p style={{fontSize:14,fontWeight:600}}>Henüz mal kabul yok</p></div>}
       </div>
       {toast&&<Toast {...toast} onDone={()=>setToast(null)}/>}
@@ -936,9 +908,13 @@ function VasCard({item,onSend}){
       <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>{item.malzemeKodu||item.ean} · {item.adet} adet</p>
       {!showPicker?(
         <div style={{display:'flex',gap:8}}>
-          <input value={lok} onChange={e=>setLok(e.target.value.toUpperCase())} placeholder="Lokasyon" style={{flex:1,padding:'8px 12px',border:'1px solid #e2e8f0',borderRadius:8,fontSize:13,outline:'none',fontFamily:'monospace'}}/>
+          <input value={lok} onChange={e=>setLok(e.target.value.toUpperCase())} placeholder="Lokasyon"
+            style={{flex:1,padding:'8px 12px',border:'1px solid #e2e8f0',borderRadius:8,fontSize:13,outline:'none',fontFamily:'monospace'}}/>
           <button onClick={()=>setShowPicker(true)} style={{background:'#f1f5f9',border:'none',borderRadius:8,padding:'8px 10px',cursor:'pointer',fontSize:13}}>📍</button>
-          <button onClick={()=>onSend(item,lok)} disabled={!lok} style={{background:'#10b981',border:'none',borderRadius:8,color:'#fff',padding:'8px 14px',fontSize:13,fontWeight:600,cursor:'pointer',opacity:!lok?.5:1}}>Gönder ✓</button>
+          <button onClick={()=>onSend(item,lok)} disabled={!lok}
+            style={{background:'#10b981',border:'none',borderRadius:8,color:'#fff',padding:'8px 14px',fontSize:13,fontWeight:600,cursor:'pointer',opacity:!lok?.5:1}}>
+            Gönder ✓
+          </button>
         </div>
       ):(
         <LokPicker onSelect={l=>{setLok(l);setShowPicker(false);}}/>
