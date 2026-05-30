@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { collection, addDoc, getDocs, doc, updateDoc, setDoc,
+import { collection, addDoc, getDocs, doc, updateDoc, setDoc, deleteDoc,
          query, where, orderBy, Timestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
@@ -521,6 +521,17 @@ export default function MalKabul() {
     else if(mkTur!=='manuel') writeSetupDraft({mkTur,mkRef:[],sessionAdi});
   },[mkRef,mkTur,sessionAdi]);
 
+  const deleteSession=async(session)=>{
+    const label=session.sessionAdi||(session.mkTur==='referansli'?'Referanslı':'Manuel')+' Mal Kabul';
+    if(!window.confirm(`"${label}" oturumu silinecek.\n\nSayım verileri (countEntries) korunacak.\n\nEmin misiniz?`)) return;
+    try{
+      await deleteDoc(doc(db,'countSessions',session.id));
+      clearMkDraft(session.id);
+      setSessions(prev=>prev.filter(s=>s.id!==session.id));
+      toast$('Oturum silindi (veriler korundu)','success');
+    }catch(e){toast$('Hata: '+e.message,'error');}
+  };
+
   const parseMkRef=(file)=>{
     const reader=new FileReader();
     reader.onload=({target:{result}})=>{
@@ -883,7 +894,11 @@ export default function MalKabul() {
                     <p style={{fontSize:11,color:'#64748b'}}>{s.baslatan} · {tarih}{refItems.length>0?` · ${refItems.length} kalem`:''}</p>
                     {refItems.length>0&&<div style={{marginTop:6,height:4,background:'#bfdbfe',borderRadius:2,overflow:'hidden'}}><div style={{height:'100%',width:`${pct}%`,background:'#1e40af',borderRadius:2}}/></div>}
                   </div>
-                  <button onClick={()=>openSession(s)} style={{...S.btn,background:'#1e40af',color:'#fff',padding:'9px 0',fontSize:13}}>Devam Et →</button>
+                  <div style={{display:'flex',gap:8}}>
+                    <button onClick={()=>openSession(s)} style={{...S.btn,flex:1,background:'#1e40af',color:'#fff',padding:'9px 0',fontSize:13}}>Devam Et →</button>
+                    {isAdmin&&<button onClick={()=>deleteSession(s)}
+                      style={{...S.btn,background:'#fee2e2',color:'#ef4444',padding:'9px 12px',fontSize:13}}>🗑</button>}
+                  </div>
                 </div>
               </div>
             );
