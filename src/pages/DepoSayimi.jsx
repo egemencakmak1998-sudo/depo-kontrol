@@ -11,12 +11,14 @@ function Toast({ msg, type, onDone }) {
 }
 
 /* ── LOKASYON SEÇİCİ ── */
-function LokPicker({ onSelect, currentLok }) {
+function LokPicker({ onSelect, currentLok, sayilanLoklar=[] }) {
   const [search, setSearch] = useState('');
   const [kor, setKor] = useState(currentLok ? currentLok.slice(1,4) : '109');
   const [raf, setRaf] = useState(currentLok ? parseInt(currentLok.slice(5,8)) : null);
   const [kat, setKat] = useState(currentLok ? currentLok.slice(8) : null);
   const [camOn, setCamOn] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [pendingLok, setPendingLok] = useState(null);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const detRef = useRef(null);
@@ -24,6 +26,7 @@ function LokPicker({ onSelect, currentLok }) {
 
   const KATS = ['A','B','C','D','E','F'];
   const curLok = raf && kat ? `A${kor}S${String(raf).padStart(3,'0')}${kat}` : null;
+  const curLokSayildi = curLok && sayilanLoklar.includes(curLok);
 
   const stopCam = () => {
     if(rafAnimRef.current) cancelAnimationFrame(rafAnimRef.current);
@@ -74,8 +77,43 @@ function LokPicker({ onSelect, currentLok }) {
     if(m){ setKor(m[1]); setRaf(parseInt(m[2])); setKat(m[3].toUpperCase()); }
   };
 
+  const handleSelect = (lok) => {
+    if(sayilanLoklar.includes(lok)){
+      setPendingLok(lok);
+      setShowConfirm(true);
+    } else {
+      onSelect(lok);
+    }
+  };
+
   return (
     <div style={{padding:14}}>
+      {/* Sayıldı onay modalı */}
+      {showConfirm&&pendingLok&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.5)',display:'flex',alignItems:'flex-end',justifyContent:'center',zIndex:300}}>
+          <div style={{background:'#fff',borderRadius:'20px 20px 0 0',padding:24,width:'100%',maxWidth:500}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
+              <span style={{fontSize:24}}>✅</span>
+              <div>
+                <p style={{fontSize:15,fontWeight:700,color:'#0f172a'}}>Bu lokasyon sayıldı</p>
+                <p style={{fontSize:12,color:'#64748b',fontFamily:'monospace'}}>{pendingLok}</p>
+              </div>
+            </div>
+            <p style={{fontSize:13,color:'#475569',marginBottom:20}}>Bu lokasyon daha önce sayılmış. Tekrar sayarsanız mevcut veriler üzerine yazılır.</p>
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>{setShowConfirm(false);setPendingLok(null);}}
+                style={{flex:1,padding:13,borderRadius:12,border:'2px solid #e2e8f0',background:'#fff',color:'#64748b',fontWeight:600,cursor:'pointer',fontSize:14}}>
+                İptal
+              </button>
+              <button onClick={()=>{setShowConfirm(false);onSelect(pendingLok);setPendingLok(null);}}
+                style={{flex:2,padding:13,borderRadius:12,border:'none',background:'#1e40af',color:'#fff',fontWeight:700,cursor:'pointer',fontSize:14}}>
+                Tekrar Say →
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Arama + Barkod */}
       <div style={{display:'flex',gap:8,marginBottom:14}}>
         <input value={search} onChange={e=>handleSearch(e.target.value)}
@@ -139,33 +177,65 @@ function LokPicker({ onSelect, currentLok }) {
         <>
           <p style={{fontSize:11,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>Kat</p>
           <div style={{display:'flex',gap:8,marginBottom:14}}>
-            {KATS.map(k=>(
-              <button key={k} onClick={()=>setKat(k)}
-                style={{flex:1,border:'none',borderRadius:8,padding:'10px 0',fontSize:14,fontWeight:600,cursor:'pointer',
-                  background:kat===k?'#1e40af':'#f1f5f9',color:kat===k?'#fff':'#475569'}}>
-                {k}
-              </button>
-            ))}
+            {KATS.map(k=>{
+              const lokK=`A${kor}S${String(raf).padStart(3,'0')}${k}`;
+              const sayildi=sayilanLoklar.includes(lokK);
+              return(
+                <button key={k} onClick={()=>setKat(k)}
+                  style={{flex:1,border:sayildi&&kat!==k?'2px solid #10b981':'none',borderRadius:8,padding:'10px 0',fontSize:14,fontWeight:600,cursor:'pointer',
+                    background:kat===k?'#1e40af':sayildi?'#dcfce7':'#f1f5f9',
+                    color:kat===k?'#fff':sayildi?'#15803d':'#475569',
+                    position:'relative'}}>
+                  {k}
+                  {sayildi&&kat!==k&&<span style={{position:'absolute',top:2,right:3,fontSize:8,lineHeight:1}}>✓</span>}
+                </button>
+              );
+            })}
           </div>
         </>
       )}
 
       {/* Seçilen + Onayla */}
       {curLok&&(
-        <button onClick={()=>onSelect(curLok)}
-          style={{width:'100%',background:'#1e40af',border:'none',borderRadius:12,padding:'13px 0',fontSize:15,fontWeight:700,cursor:'pointer',color:'#fff'}}>
-          📍 {curLok} — Sayıma Başla →
-        </button>
+        <div>
+          {curLokSayildi&&(
+            <div style={{background:'#dcfce7',border:'1px solid #86efac',borderRadius:10,padding:'10px 14px',marginBottom:10,display:'flex',alignItems:'center',gap:8}}>
+              <span style={{fontSize:16}}>✅</span>
+              <div>
+                <p style={{fontSize:12,fontWeight:700,color:'#15803d'}}>Bu lokasyon sayıldı</p>
+                <p style={{fontSize:11,color:'#166534'}}>Tekrar saymak için butona basın</p>
+              </div>
+            </div>
+          )}
+          <button onClick={()=>handleSelect(curLok)}
+            style={{width:'100%',background:curLokSayildi?'#15803d':'#1e40af',border:'none',borderRadius:12,padding:'13px 0',fontSize:15,fontWeight:700,cursor:'pointer',color:'#fff'}}>
+            {curLokSayildi?'🔄 Tekrar Say →':'📍 '+curLok+' — Sayıma Başla →'}
+          </button>
+        </div>
       )}
     </div>
   );
 }
 
 /* ── SAYIM EKRANI ── */
-function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], lokLoading=false, onNavigate, onSubmit, onBack }) {
+function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], lokLoading=false, onNavigate, onSubmit, onBack, existingEntry=null }) {
   const { user, profile } = useAuth();
-  const [entries, setEntries] = useState({});
-  const [hasarlilar, setHasarlilar] = useState({});
+  const [entries, setEntries] = useState(()=>{
+    if(existingEntry){
+      const m={};
+      (existingEntry.items||[]).forEach(i=>{if(i.ean)m[i.ean]=i.adet;});
+      return m;
+    }
+    return {};
+  });
+  const [hasarlilar, setHasarlilar] = useState(()=>{
+    if(existingEntry){
+      const m={};
+      (existingEntry.items||[]).forEach(i=>{if(i.ean&&i.hasarliAdet>0)m[i.ean]=i.hasarliAdet;});
+      return m;
+    }
+    return {};
+  });
   const [barInput, setBarInput] = useState('');
   const [mode, setMode] = useState('text');
   const [camOn, setCamOn] = useState(false);
@@ -255,16 +325,33 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
         malzemeKodu:products[ean]?.malzemeKodu||'',
         hasarliAdet:hasarlilar[ean]||0,
       }));
-      const ref = await addDoc(collection(db,'countEntries'),{
-        sessionId, lokasyon, tip:sessionTip,
-        kullanici:profile?.name||user?.email||'',
-        kullaniciId:user?.uid||'',
-        items, tarih:Timestamp.now(), durum:'bekliyor',
-        hasarliOzet:Object.entries(hasarlilar).map(([ean,adet])=>({
-          ean,adet,urunAdi:products[ean]?.urunAdi||''
-        })).filter(h=>h.adet>0),
-      });
-      onSubmit(ref.id, items);
+      const hasarliOzet=Object.entries(hasarlilar).map(([ean,adet])=>({
+        ean,adet,urunAdi:products[ean]?.urunAdi||''
+      })).filter(h=>h.adet>0);
+
+      let entryId;
+      if(existingEntry){
+        /* Düzenleme modu — mevcut entry güncelle */
+        await updateDoc(doc(db,'countEntries',existingEntry.id),{
+          items, hasarliOzet,
+          tarih:Timestamp.now(),
+          kullanici:profile?.name||user?.email||'',
+          kullaniciId:user?.uid||'',
+          durum:'bekliyor',
+        });
+        entryId=existingEntry.id;
+      } else {
+        /* Yeni kayıt */
+        const ref = await addDoc(collection(db,'countEntries'),{
+          sessionId, lokasyon, tip:sessionTip,
+          kullanici:profile?.name||user?.email||'',
+          kullaniciId:user?.uid||'',
+          items, tarih:Timestamp.now(), durum:'bekliyor',
+          hasarliOzet,
+        });
+        entryId=ref.id;
+      }
+      onSubmit(entryId, items, !!existingEntry);
     }catch(e){toast$('Hata: '+e.message,'error');}
     setSaving(false);
   };
@@ -278,7 +365,10 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
       <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
         <button onClick={onBack} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
         <div style={{flex:1}}>
-          <p style={{color:'#fff',fontWeight:700,fontSize:14}}>📍 {lokasyon}</p>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <p style={{color:'#fff',fontWeight:700,fontSize:14}}>📍 {lokasyon}</p>
+            {existingEntry&&<span style={{background:'#10b981',color:'#fff',borderRadius:6,padding:'2px 7px',fontSize:10,fontWeight:700}}>✏️ Düzenle</span>}
+          </div>
           <p style={{color:'#94a3b8',fontSize:11}}>{itemList.length} kalem · {toplamAdet} adet{toplamHasar>0?` · ⚠️ ${toplamHasar} hasarlı`:''}</p>
         </div>
         <button onClick={handleSubmit} disabled={saving}
@@ -412,6 +502,7 @@ export default function DepoSayimi() {
   const [lastLok, setLastLok] = useState(() => { try { return localStorage.getItem('depoKontrol:sayim:lastLok')||null; } catch { return null; } });
   const [activeSession, setActiveSession] = useState(null);
   const [selectedLok, setSelectedLok] = useState(null);
+  const [selectedEntry, setSelectedEntry] = useState(null);
   const [myEntries, setMyEntries] = useState([]);
   const [allEntries, setAllEntries] = useState([]);
   const [products, setProducts] = useState({});
@@ -489,11 +580,18 @@ export default function DepoSayimi() {
   },[]);
 
   const selectLokasyon = useCallback((lok) => {
+    // Bu lokasyonda benim daha önce kaydettiğim entry var mı?
+    const existing = allEntries.find(e=>e.lokasyon===lok&&e.kullaniciId===undefined
+      ? false : allEntries.find(e2=>e2.lokasyon===lok)) || null;
+    // Tüm entry'ler arasında bu lokasyona ait en son kaydı bul
+    const lokEntry = [...allEntries].filter(e=>e.lokasyon===lok)
+      .sort((a,b)=>(b.tarih?.toMillis?.()??0)-(a.tarih?.toMillis?.()??0))[0] || null;
     setSelectedLok(lok);
+    setSelectedEntry(lokEntry);
     setLastLok(lok);
     loadLokasyon(lok);
     setView('sayim');
-  },[loadLokasyon]);
+  },[loadLokasyon, allEntries]);
 
   const loadEntries = useCallback(async(sessionId)=>{
     const snap=await getDocs(query(collection(db,'countEntries'),where('sessionId','==',sessionId)));
@@ -529,10 +627,20 @@ export default function DepoSayimi() {
     }catch(e){toast$('Hata: '+e.message,'error');}
   };
 
-  const handleSayimSubmit = async(entryId,items) => {
-    toast$(`${selectedLok} kaydedildi ✓`,'success');
-    setMyEntries(prev=>[...prev,{id:entryId,lokasyon:selectedLok,items,kullaniciId:user?.uid,kullanici:profile?.name||''}]);
+  const handleSayimSubmit = async(entryId, items, isEdit=false) => {
+    if(isEdit){
+      // Mevcut entry'yi güncelle
+      setMyEntries(prev=>prev.map(e=>e.id===entryId?{...e,items}:e));
+      setAllEntries(prev=>prev.map(e=>e.id===entryId?{...e,items}:e));
+      toast$(`${selectedLok} güncellendi ✓`,'success');
+    } else {
+      toast$(`${selectedLok} kaydedildi ✓`,'success');
+      const newEntry={id:entryId,lokasyon:selectedLok,items,kullaniciId:user?.uid,kullanici:profile?.name||''};
+      setMyEntries(prev=>[...prev,newEntry]);
+      setAllEntries(prev=>[...prev,newEntry]);
+    }
     setSelectedLok(null);
+    setSelectedEntry(null);
     setView('genel_lok');
   };
 
@@ -565,9 +673,10 @@ export default function DepoSayimi() {
     return <SayimEkrani lokasyon={selectedLok} sessionId={activeSession.id}
       sessionTip={activeSession.tip} products={products}
       lokMevcut={lokMevcut} lokLoading={lokLoading}
-      onNavigate={(newLok)=>{ setSelectedLok(newLok); setLastLok(newLok); loadLokasyon(newLok); }}
+      existingEntry={selectedEntry}
+      onNavigate={(newLok)=>{ setSelectedLok(newLok); setLastLok(newLok); loadLokasyon(newLok); setSelectedEntry(allEntries.find(e=>e.lokasyon===newLok)||null); }}
       onSubmit={handleSayimSubmit}
-      onBack={()=>{setView('genel_lok');}}/>;
+      onBack={()=>{setSelectedEntry(null);setView('genel_lok');}}/>;
   }
 
   /* ── GENEL SAYIM LOK SEÇ ── */
@@ -598,7 +707,7 @@ export default function DepoSayimi() {
             </div>
           </div>
         )}
-        <LokPicker onSelect={selectLokasyon} currentLok={lastLok||saydim[saydim.length-1]} />
+        <LokPicker onSelect={selectLokasyon} currentLok={lastLok||saydim[saydim.length-1]} sayilanLoklar={allEntries.map(e=>e.lokasyon).filter(Boolean)} />
       </div>
     );
   }
