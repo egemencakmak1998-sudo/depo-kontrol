@@ -377,6 +377,23 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
         </button>
       </div>
 
+      {existingEntry&&(
+        <div style={{background:'#fefce8',borderBottom:'1px solid #fde68a',padding:'10px 16px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+            <span style={{fontSize:15}}>📋</span>
+            <p style={{fontSize:12,fontWeight:700,color:'#92400e'}}>Önceki Sayım Bilgileri</p>
+          </div>
+          <p style={{fontSize:11,color:'#a16207'}}>
+            👤 {existingEntry.kullanici||'—'}
+            {existingEntry.tarih?.toDate&&<> · 🕐 {(()=>{try{return existingEntry.tarih.toDate().toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});}catch{return '';}})()}</>}
+          </p>
+          <p style={{fontSize:11,color:'#a16207',marginTop:2}}>
+            📦 {(existingEntry.items||[]).length} kalem · {(existingEntry.items||[]).reduce((a,it)=>a+(it.adet||0),0)} adet sayılmış
+          </p>
+          <p style={{fontSize:10,color:'#ca8a04',marginTop:4,fontStyle:'italic'}}>Aşağıdaki adetler önceki sayımdan yüklendi. Kontrol edip Kaydet'e basın.</p>
+        </div>
+      )}
+
       <div style={{display:'flex',borderBottom:'1px solid #e2e8f0'}}>
         {[['text','⌨️ Metin'],['cam','📷 Kamera']].map(([m,l])=>(
           <button key={m} onClick={()=>{if(m==='cam'&&!camOn)startCam();if(m!=='cam')stopCam();setMode(m);}}
@@ -509,6 +526,7 @@ export default function DepoSayimi() {
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
   const [conflicts, setConflicts] = useState([]);
+  const [lokFilter, setLokFilter] = useState('all'); // all | counted | uncounted
 
   const toast$ = (msg,type='info') => setToast({msg,type,id:Date.now()});
 
@@ -663,6 +681,27 @@ export default function DepoSayimi() {
     XLSX.writeFile(wb,'genel_sayim_kok_stok.xlsx');
   };
 
+  /* ── ANLIK DETAYLI EXPORT (sayım devam ederken) ── */
+  const exportDetayli = (tumLoklar, entriesByLok) => {
+    const fmtTarih=(t)=>{ try{return t?.toDate?.()?.toLocaleString('tr-TR')||'';}catch{return '';} };
+    const rows=[['Lokasyon','Ürün Adı','Barkod/EAN','Malzeme Kodu','Sayılan Adet','Hasarlı Adet','Sayımı Yapan','Sayım Tarihi/Saati','Sayım Durumu']];
+    tumLoklar.forEach(lok=>{
+      const entry=entriesByLok[lok];
+      if(entry&&(entry.items||[]).length>0){
+        (entry.items||[]).forEach(item=>{
+          rows.push([lok,item.urunAdi||'',item.ean||'',item.malzemeKodu||'',item.adet||0,item.hasarliAdet||0,entry.kullanici||'',fmtTarih(entry.tarih),'Sayıldı']);
+        });
+      } else {
+        rows.push([lok,'','','','','','','','Sayılmadı']);
+      }
+    });
+    const wb=XLSX.utils.book_new();
+    const ws=XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols']=[{wch:14},{wch:34},{wch:16},{wch:16},{wch:12},{wch:12},{wch:18},{wch:20},{wch:12}];
+    XLSX.utils.book_append_sheet(wb,ws,'Sayim Durumu');
+    XLSX.writeFile(wb,`sayim_durum_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
+
   const S={
     card:{background:'#fff',borderRadius:14,padding:'14px 16px',border:'1px solid #e2e8f0',marginBottom:12},
     btn:{border:'none',borderRadius:10,padding:'10px 16px',fontSize:13,fontWeight:600,cursor:'pointer'},
@@ -714,22 +753,81 @@ export default function DepoSayimi() {
 
   /* ── ADMİN DETAY ── */
   if(view==='admin_detay'&&activeSession){
-    const lokGroups={};
-    allEntries.forEach(e=>{if(!lokGroups[e.lokasyon])lokGroups[e.lokasyon]=[];lokGroups[e.lokasyon].push(e);});
+    // Her lokasyon için en son entry (çok kullanıcılı: en son kaydedilen)
+    const entriesByLok={};
+    allEntries.forEach(e=>{
+      if(!e.lokasyon||e.lokasyon==='MAL_KABUL') return;
+      const cur=entriesByLok[e.lokasyon];
+      if(!cur||((e.tarih?.toMillis?.()??0)>(cur.tarih?.toMillis?.()??0))) entriesByLok[e.lokasyon]=e;
+    });
+
+    // Tüm geçerli lokasyonlar — products.locations[] üzerinden
+    const tumLokSet=new Set();
+    Object.values(products).forEach(p=>{
+      (p.locations||[]).forEach(l=>{ if(l&&l!=='BELIRLENECEK'&&/^A\d{3}S\d{3}[A-F]$/.test(l)) tumLokSet.add(l); });
+    });
+    // Sayılmış ama ürün listesinde olmayan lokasyonları da ekle
+    Object.keys(entriesByLok).forEach(l=>tumLokSet.add(l));
+    const tumLoklar=[...tumLokSet].sort();
+
+    const sayilanLoklar=tumLoklar.filter(l=>entriesByLok[l]);
+    const sayilmayanLoklar=tumLoklar.filter(l=>!entriesByLok[l]);
+    const toplam=tumLoklar.length;
+    const tamamlanan=sayilanLoklar.length;
+    const kalan=toplam-tamamlanan;
+    const yuzde=toplam>0?Math.round((tamamlanan/toplam)*100):0;
+
+    const gosterilen=lokFilter==='counted'?sayilanLoklar:lokFilter==='uncounted'?sayilmayanLoklar:tumLoklar;
+    const fmtTarih=(t)=>{ try{return t?.toDate?.()?.toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})||'';}catch{return '';} };
+
     return (
       <div>
         <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
           <button onClick={()=>setView('genel_lok')} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
-          <p style={{color:'#fff',fontWeight:700,fontSize:14}}>Sayım Yönetimi</p>
-          <button onClick={()=>exportGenelSayim(activeSession.id)}
-            style={{...S.btn,marginLeft:'auto',background:'#10b981',color:'#fff',padding:'7px 12px',fontSize:12}}>
-            ⬇️ Kök Stok Excel
-          </button>
+          <p style={{color:'#fff',fontWeight:700,fontSize:14,flex:1}}>Sayım Yönetimi</p>
+          <button onClick={()=>loadEntries(activeSession.id)}
+            style={{...S.btn,background:'rgba(255,255,255,.1)',color:'#fff',padding:'7px 10px',fontSize:12}}>↻</button>
         </div>
+
         <div style={{padding:16}}>
-          <div style={{...S.card,background:'#f8fafc'}}>
-            <p style={{fontSize:12,color:'#64748b'}}>{allEntries.length} giriş · {Object.keys(lokGroups).length} lokasyon · {conflicts.length} çakışma</p>
+          {/* Progress bar */}
+          <div style={S.card}>
+            <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginBottom:8}}>
+              <p style={{fontSize:13,fontWeight:700,color:'#0f172a'}}>Genel İlerleme</p>
+              <p style={{fontSize:22,fontWeight:800,color:yuzde>=100?'#10b981':'#1e40af'}}>%{yuzde}</p>
+            </div>
+            <div style={{height:12,background:'#e2e8f0',borderRadius:8,overflow:'hidden',marginBottom:10}}>
+              <div style={{height:'100%',width:`${yuzde}%`,background:yuzde>=100?'#10b981':'linear-gradient(90deg,#3b82f6,#1e40af)',borderRadius:8,transition:'width .3s'}} />
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,textAlign:'center'}}>
+              <div style={{background:'#f8fafc',borderRadius:8,padding:'8px 4px'}}>
+                <p style={{fontSize:18,fontWeight:800,color:'#0f172a'}}>{toplam}</p>
+                <p style={{fontSize:10,color:'#64748b'}}>Toplam Lokasyon</p>
+              </div>
+              <div style={{background:'#f0fdf4',borderRadius:8,padding:'8px 4px'}}>
+                <p style={{fontSize:18,fontWeight:800,color:'#15803d'}}>{tamamlanan}</p>
+                <p style={{fontSize:10,color:'#15803d'}}>Tamamlanan</p>
+              </div>
+              <div style={{background:'#fff7ed',borderRadius:8,padding:'8px 4px'}}>
+                <p style={{fontSize:18,fontWeight:800,color:'#d97706'}}>{kalan}</p>
+                <p style={{fontSize:10,color:'#d97706'}}>Kalan</p>
+              </div>
+            </div>
           </div>
+
+          {/* Export */}
+          <div style={{display:'flex',gap:8,marginBottom:12}}>
+            <button onClick={()=>exportDetayli(tumLoklar,entriesByLok)}
+              style={{...S.btn,flex:1,background:'#10b981',color:'#fff',fontSize:12}}>
+              ⬇️ Anlık Durum Excel
+            </button>
+            <button onClick={()=>exportGenelSayim(activeSession.id)}
+              style={{...S.btn,flex:1,background:'#0d9488',color:'#fff',fontSize:12}}>
+              ⬇️ Kök Stok Excel
+            </button>
+          </div>
+
+          {/* Çakışmalar */}
           {conflicts.map((c,i)=>(
             <div key={i} style={{...S.card,border:'1px solid #fecaca',background:'#fff1f2'}}>
               <p style={{fontSize:12,fontWeight:700,color:'#dc2626',marginBottom:8}}>⚠️ Çakışma: {c.lokasyon}</p>
@@ -749,19 +847,44 @@ export default function DepoSayimi() {
               </div>
             </div>
           ))}
-          {Object.entries(lokGroups).map(([lok,entries])=>(
-            <div key={lok} style={S.card}>
-              <div style={{display:'flex',alignItems:'center',gap:8}}>
-                <p style={{fontSize:12,fontWeight:700,fontFamily:'monospace',color:'#1e293b',flex:1}}>{lok}</p>
-                {entries.length>1
-                  ?<span style={{background:'#fef3c7',color:'#d97706',borderRadius:6,padding:'2px 8px',fontSize:10,fontWeight:700}}>⚠️ {entries.length}</span>
-                  :<span style={{background:'#dcfce7',color:'#15803d',borderRadius:6,padding:'2px 8px',fontSize:10,fontWeight:700}}>✅</span>}
+
+          {/* Filtre */}
+          <div style={{display:'flex',gap:6,marginBottom:12}}>
+            {[['all',`Tümü (${toplam})`],['counted',`Sayılan (${tamamlanan})`],['uncounted',`Sayılmayan (${kalan})`]].map(([f,l])=>(
+              <button key={f} onClick={()=>setLokFilter(f)}
+                style={{flex:1,border:'none',borderRadius:8,padding:'8px 4px',fontSize:11,fontWeight:600,cursor:'pointer',
+                  background:lokFilter===f?'#1e40af':'#f1f5f9',color:lokFilter===f?'#fff':'#475569'}}>
+                {l}
+              </button>
+            ))}
+          </div>
+
+          {/* Lokasyon listesi */}
+          {gosterilen.length===0&&<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'24px 0'}}>Bu filtrede lokasyon yok</p>}
+          {gosterilen.map(lok=>{
+            const entry=entriesByLok[lok];
+            const sayildi=!!entry;
+            const kalemSayisi=entry?(entry.items||[]).length:0;
+            const toplamAdet=entry?(entry.items||[]).reduce((a,it)=>a+(it.adet||0),0):0;
+            return (
+              <div key={lok} style={{background:'#fff',borderRadius:10,padding:'10px 12px',marginBottom:6,
+                border:`1px solid ${sayildi?'#bbf7d0':'#e2e8f0'}`,
+                borderLeft:`3px solid ${sayildi?'#10b981':'#cbd5e1'}`}}>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <p style={{fontSize:13,fontWeight:700,fontFamily:'monospace',color:'#1e293b',flex:1}}>{lok}</p>
+                  {sayildi
+                    ?<span style={{background:'#dcfce7',color:'#15803d',borderRadius:6,padding:'2px 8px',fontSize:10,fontWeight:700}}>✅ Sayıldı</span>
+                    :<span style={{background:'#f1f5f9',color:'#94a3b8',borderRadius:6,padding:'2px 8px',fontSize:10,fontWeight:700}}>○ Sayılmadı</span>}
+                </div>
+                {sayildi&&(
+                  <div style={{marginTop:6,paddingTop:6,borderTop:'1px solid #f1f5f9'}}>
+                    <p style={{fontSize:11,color:'#475569'}}>👤 {entry.kullanici||'—'} · {fmtTarih(entry.tarih)}</p>
+                    <p style={{fontSize:11,color:'#64748b',marginTop:2}}>📦 {kalemSayisi} kalem · {toplamAdet} adet</p>
+                  </div>
+                )}
               </div>
-              {entries.map((e,j)=>(
-                <p key={j} style={{fontSize:11,color:'#64748b',marginTop:2}}>{e.kullanici}: {e.items?.length} kalem</p>
-              ))}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
