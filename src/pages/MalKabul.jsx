@@ -506,8 +506,13 @@ export default function MalKabul() {
   },[]);
 
   const loadSessions=useCallback(async()=>{
-    try{const snap=await getDocs(query(collection(db,'countSessions'),where('tip','==','mal_kabul'),orderBy('baslangic','desc')));
-    setSessions(snap.docs.map(d=>({id:d.id,...d.data()})));}catch{}
+    try{
+      // orderBy kaldırıldı — composite index gerekmeden çalışır, client-side sıralama yapılır
+      const snap=await getDocs(query(collection(db,'countSessions'),where('tip','==','mal_kabul')));
+      const list=snap.docs.map(d=>({id:d.id,...d.data()}));
+      list.sort((a,b)=>(b.baslangic?.toMillis?.()??0)-(a.baslangic?.toMillis?.()??0));
+      setSessions(list);
+    }catch(e){console.error('loadSessions error:',e);}
   },[]);
   useEffect(()=>{loadSessions();},[loadSessions]);
 
