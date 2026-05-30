@@ -163,7 +163,7 @@ function LokPicker({ onSelect, currentLok }) {
 }
 
 /* ── SAYIM EKRANI ── */
-function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], onSubmit, onBack }) {
+function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], lokLoading=false, onNavigate, onSubmit, onBack }) {
   const { user, profile } = useAuth();
   const [entries, setEntries] = useState({});
   const [hasarlilar, setHasarlilar] = useState({});
@@ -175,6 +175,24 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
   const [toast, setToast] = useState(null);
   const toast$ = (msg,type='info') => setToast({msg,type,id:Date.now()});
 
+  // Lokasyon navigasyonu — A{kor}S{raf}{kat}
+  const KATS_NAV = ['A','B','C','D','E','F'];
+  const navLok = (dir) => {
+    const m = String(lokasyon||'').match(/^A?(109|110)S?(\d{3})([A-F])$/i);
+    if(!m || !onNavigate) return;
+    let kor=m[1], raf=parseInt(m[2]), kat=m[3].toUpperCase();
+    const ki=KATS_NAV.indexOf(kat);
+    if(dir==='up'&&ki<KATS_NAV.length-1) kat=KATS_NAV[ki+1];
+    else if(dir==='down'&&ki>0) kat=KATS_NAV[ki-1];
+    else if(dir==='right'&&raf<117) raf++;
+    else if(dir==='left'&&raf>1) raf--;
+    else return;
+    if(Object.keys(entriesRef.current||{}).length>0){
+      if(!window.confirm('Bu lokasyonda kaydedilmemiş sayım var. Kaydetmeden geçilsin mi?')) return;
+    }
+    onNavigate(`A${kor}S${String(raf).padStart(3,'0')}${kat}`);
+  };
+
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const detRef = useRef(null);
@@ -182,6 +200,8 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
   const lastBcRef = useRef({code:'',ts:0});
   const entriesRef = useRef(entries);
   useEffect(()=>{entriesRef.current=entries;},[entries]);
+  // Lokasyon değişince sayım state'ini sıfırla (yeni lokasyon = yeni sayım)
+  useEffect(()=>{ setEntries({}); setHasarlilar({}); }, [lokasyon]);
 
   const stopCam = useCallback(()=>{
     if(rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -323,22 +343,38 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
           </div>
         )}
 
-        {/* Mevcut lokasyon ürünleri referans */}
-      {lokMevcut.length>0&&(
+        {/* Lokasyon hızlı navigasyon */}
+        {onNavigate&&(
+          <div style={{background:'#eff6ff',borderRadius:10,padding:'8px 10px',marginBottom:10,border:'1px solid #bfdbfe'}}>
+            <p style={{fontSize:10,color:'#1d4ed8',marginBottom:6,fontWeight:700,textTransform:'uppercase',letterSpacing:1}}>🧭 Hızlı Lokasyon Geçişi</p>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+              {[['left','← Sol Raf'],['right','Sağ Raf →'],['down','↓ Alt Kat'],['up','↑ Üst Kat']].map(([d,l])=>(
+                <button key={d} onClick={()=>navLok(d)}
+                  style={{background:'#fff',border:'1px solid #bfdbfe',borderRadius:8,padding:'7px 0',fontSize:12,fontWeight:600,cursor:'pointer',color:'#1e40af'}}>{l}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Bu lokasyondaki mevcut ürünler — her zaman görünür */}
         <div style={{background:'#eff6ff',borderRadius:10,padding:'10px 12px',marginBottom:12,border:'1px solid #bfdbfe'}}>
           <p style={{fontSize:11,fontWeight:700,color:'#1d4ed8',marginBottom:8,textTransform:'uppercase',letterSpacing:1}}>📍 Bu Lokasyondaki Mevcut Ürünler</p>
-          {lokMevcut.map((p,i)=>(
-            <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 0',borderBottom:i<lokMevcut.length-1?'1px solid #dbeafe':'none'}}>
-              <div style={{flex:1,minWidth:0}}>
-                <p style={{fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.urunAdi||'—'}</p>
-                <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{p.malzemeKodu}</p>
-              </div>
-              <span style={{fontSize:13,fontWeight:700,color:p.lokMiktar<=0?'#ef4444':'#1d4ed8',flexShrink:0}}>{p.lokMiktar??'—'} adet</span>
-            </div>
-          ))}
+          {lokLoading
+            ? <p style={{fontSize:12,color:'#64748b',textAlign:'center',padding:'8px 0'}}>Yükleniyor...</p>
+            : lokMevcut.length===0
+              ? <p style={{fontSize:12,color:'#64748b',textAlign:'center',padding:'8px 0'}}>Bu lokasyonda kayıtlı ürün bulunmuyor</p>
+              : lokMevcut.map((p,i)=>(
+                  <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 0',borderBottom:i<lokMevcut.length-1?'1px solid #dbeafe':'none'}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <p style={{fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.urunAdi||'—'}</p>
+                      <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{p.malzemeKodu}</p>
+                    </div>
+                    <span style={{fontSize:13,fontWeight:700,color:p.lokMiktar<=0?'#ef4444':'#1d4ed8',flexShrink:0}}>{p.lokMiktar??'—'} adet</span>
+                  </div>
+                ))
+          }
         </div>
-      )}
-      {itemList.length===0&&<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'16px 0'}}>Henüz ürün taranmadı</p>}
+        {itemList.length===0&&<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'16px 0'}}>Henüz ürün taranmadı</p>}
         {itemList.map(([ean,adet])=>{
           const p=products[ean]||{};
           const hasar=hasarlilar[ean]||0;
@@ -373,6 +409,8 @@ export default function DepoSayimi() {
   const [view, setView] = useState('list');
   const [sessions, setSessions] = useState([]);
   const [lokMevcut, setLokMevcut] = useState([]); // current products at selected location
+  const [lokLoading, setLokLoading] = useState(false);
+  const [lastLok, setLastLok] = useState(() => { try { return localStorage.getItem('depoKontrol:sayim:lastLok')||null; } catch { return null; } });
   const [activeSession, setActiveSession] = useState(null);
   const [selectedLok, setSelectedLok] = useState(null);
   const [myEntries, setMyEntries] = useState([]);
@@ -441,8 +479,10 @@ export default function DepoSayimi() {
   };
 
   const loadLokasyon = useCallback(async(lok) => {
-    if(!lok) return;
+    if(!lok) { setLokMevcut([]); return; }
+    setLokLoading(true);
     try {
+      try { localStorage.setItem('depoKontrol:sayim:lastLok', lok); } catch {}
       const snap = await getDocs(query(collection(db,'products'), where('locations','array-contains',lok)));
       const prods = snap.docs.map(d=>({id:d.id,...d.data()}));
       const withStock = await Promise.all(prods.map(async p => {
@@ -454,8 +494,16 @@ export default function DepoSayimi() {
         return {...p, lokMiktar: lokM !== null ? lokM : totM};
       }));
       setLokMevcut(withStock.sort((a,b)=>(a.urunAdi||'').localeCompare(b.urunAdi||'')));
-    } catch {}
+    } catch { setLokMevcut([]); }
+    setLokLoading(false);
   },[]);
+
+  const selectLokasyon = useCallback((lok) => {
+    setSelectedLok(lok);
+    setLastLok(lok);
+    loadLokasyon(lok);
+    setView('sayim');
+  },[loadLokasyon]);
 
   const loadEntries = useCallback(async(sessionId)=>{
     const snap=await getDocs(query(collection(db,'countEntries'),where('sessionId','==',sessionId)));
@@ -657,9 +705,10 @@ export default function DepoSayimi() {
   if(view==='sayim'&&selectedLok&&activeSession){
     return <SayimEkrani lokasyon={selectedLok} sessionId={activeSession.id}
       sessionTip={activeSession.tip} products={products}
-      lokMevcut={lokMevcut}
+      lokMevcut={lokMevcut} lokLoading={lokLoading}
+      onNavigate={(newLok)=>{ setSelectedLok(newLok); setLastLok(newLok); loadLokasyon(newLok); }}
       onSubmit={handleSayimSubmit}
-      onBack={()=>{setSelectedLok(null);setView('genel_lok');}}/>;
+      onBack={()=>{setView('genel_lok');}}/>;
   }
 
   if(view==='mk_sayim'&&activeSession){
@@ -697,7 +746,7 @@ export default function DepoSayimi() {
             </div>
           </div>
         )}
-        <LokPicker onSelect={lok=>{setSelectedLok(lok);setView('sayim');}} currentLok={saydim[saydim.length-1]} />
+        <LokPicker onSelect={selectLokasyon} currentLok={lastLok||saydim[saydim.length-1]} />
       </div>
     );
   }
