@@ -664,6 +664,7 @@ export default function MalKabul() {
     const sessionInfoMap={};
     await Promise.all(sessionIds.map(async sid=>{
       try{const sSnap=await getDocs(query(collection(db,'countSessions'),where('__name__','==',sid)));
+
         if(!sSnap.empty){const s=sSnap.docs[0].data();sessionInfoMap[sid]={baslatan:s.baslatan||'',tarih:s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||'',mkTur:s.mkTur||'manuel',sessionAdi:s.sessionAdi||''};}
       }catch{}
     }));
@@ -684,6 +685,26 @@ export default function MalKabul() {
       await addDoc(collection(db,'stockMovements'),{tarih:now,tip:'vas_lokasyon',ean:vasItem.ean,malzemeKodu:vasItem.malzemeKodu||'',urunAdi:vasItem.urunAdi||'',miktar:vasItem.adet,oncekiMiktar:prev,sonrakiMiktar:next,lokasyon,kaynak:`vas:${vasItem.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
       setVasList(prev=>prev.filter(v=>v.id!==vasItem.id));
       toast$(`${vasItem.urunAdi||vasItem.ean}: ${vasItem.adet} adet stoğa eklendi ✓`,'success');
+    }catch(e){toast$('Hata: '+e.message,'error');}
+  };
+
+  /* ── VAS: Tek ürün listeden çıkar (iptal et) ── */
+  const vasUrunuCikar=async(vasItem)=>{
+    if(!window.confirm(`"${vasItem.urunAdi||vasItem.ean}" VAS listesinden çıkarılsın mı?\n\nBu ürün stoğa eklenmeyecek ve mal kabul kaydında eksik olarak görünecek.`))return;
+    try{
+      await deleteDoc(doc(db,'vasItems',vasItem.id));
+      setVasList(prev=>prev.filter(v=>v.id!==vasItem.id));
+      toast$(`${vasItem.urunAdi||vasItem.ean} VAS listesinden çıkarıldı`,'info');
+    }catch(e){toast$('Hata: '+e.message,'error');}
+  };
+
+  /* ── VAS: Tüm grubu iptal et ── */
+  const vasGrubuIptal=async(sessionId, groupItems)=>{
+    if(!window.confirm(`Bu mal kabule ait tüm VAS ürünleri (${groupItems.length} kalem) listeden çıkarılsın mı?\n\nBu işlem geri alınamaz. Ürünler stoğa eklenmeyecek.`))return;
+    try{
+      await Promise.all(groupItems.map(item=>deleteDoc(doc(db,'vasItems',item.id))));
+      setVasList(prev=>prev.filter(v=>v.sessionId!==sessionId));
+      toast$(`${groupItems.length} ürün VAS listesinden çıkarıldı`,'info');
     }catch(e){toast$('Hata: '+e.message,'error');}
   };
 
@@ -826,17 +847,26 @@ export default function MalKabul() {
           {vasList.length===0&&<div style={{textAlign:'center',padding:'48px 0',color:'#94a3b8'}}><p style={{fontSize:28,marginBottom:8}}>🏷️</p><p style={{fontSize:14,fontWeight:600}}>VAS'ta bekleyen ürün yok</p></div>}
           {Object.entries(vasGroups).map(([sid,group])=>(
             <div key={sid} style={{marginBottom:20}}>
+              {/* Grup başlığı */}
               <div style={{background:'#7c3aed',borderRadius:'12px 12px 0 0',padding:'10px 14px',display:'flex',alignItems:'center',gap:10}}>
                 <div style={{flex:1}}>
                   <p style={{color:'#fff',fontWeight:700,fontSize:13}}>📥 {group.sessionInfo?.sessionAdi||'Mal Kabul'} — {group.sessionInfo?.tarih||'Tarih bilinmiyor'}</p>
                   <p style={{color:'rgba(255,255,255,.7)',fontSize:11}}>{group.sessionInfo?.baslatan||''} · {group.sessionInfo?.mkTur==='referansli'?'Referanslı':'Manuel'} · {group.items.length} ürün</p>
                 </div>
                 <span style={{background:'rgba(255,255,255,.2)',color:'#fff',borderRadius:20,padding:'3px 10px',fontSize:11,fontWeight:700}}>{group.items.length} kalem</span>
+                {isAdmin&&(
+                  <button onClick={()=>vasGrubuIptal(sid,group.items)}
+                    title="Tüm grubu VAS'tan çıkar"
+                    style={{background:'rgba(239,68,68,.8)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>
+                    ✕ Grubu İptal
+                  </button>
+                )}
               </div>
+              {/* Ürünler */}
               <div style={{border:'1px solid #e2e8f0',borderTop:'none',borderRadius:'0 0 12px 12px',overflow:'hidden'}}>
                 {group.items.map((item,i)=>(
                   <div key={item.id} style={{borderBottom:i<group.items.length-1?'1px solid #f1f5f9':'none'}}>
-                    <VasCard item={item} onSend={vasLokasyonaGonder}/>
+                    <VasCard item={item} onSend={vasLokasyonaGonder} onRemove={isAdmin?vasUrunuCikar:null}/>
                   </div>
                 ))}
               </div>
@@ -920,12 +950,22 @@ export default function MalKabul() {
   );
 }
 
-function VasCard({item,onSend}){
+function VasCard({item,onSend,onRemove}){
   const[lok,setLok]=useState('');const[showPicker,setShowPicker]=useState(false);
   return(
     <div style={{background:'#fff',padding:'14px 16px'}}>
-      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean}</p>
-      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>{item.malzemeKodu||item.ean} · {item.adet} adet</p>
+      <div style={{display:'flex',alignItems:'flex-start',gap:8,marginBottom:8}}>
+        <div style={{flex:1,minWidth:0}}>
+          <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean}</p>
+          <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace'}}>{item.malzemeKodu||item.ean} · {item.adet} adet</p>
+        </div>
+        {onRemove&&(
+          <button onClick={()=>onRemove(item)} title="VAS listesinden çıkar"
+            style={{flexShrink:0,background:'#fff1f2',border:'1px solid #fecaca',borderRadius:7,color:'#dc2626',padding:'4px 8px',fontSize:11,fontWeight:600,cursor:'pointer'}}>
+            ✕ Çıkar
+          </button>
+        )}
+      </div>
       {!showPicker?(
         <div style={{display:'flex',gap:8}}>
           <input value={lok} onChange={e=>setLok(e.target.value.toUpperCase())} placeholder="Lokasyon"
