@@ -11,20 +11,6 @@ function Toast({ msg, type, onDone }) {
   return <div style={{position:'fixed',top:16,left:'50%',transform:'translateX(-50%)',background:bg[type]||'#334155',color:'#fff',padding:'10px 20px',borderRadius:16,fontSize:13,fontWeight:600,zIndex:9999,maxWidth:'90vw',textAlign:'center',boxShadow:'0 4px 16px rgba(0,0,0,.2)'}}>{msg}</div>;
 }
 
-const RAF_LIMITS = {
-  '109': { start: 13, end: 117 },
-  '110': { start: 14, end: 117 }
-};
-const getRafRange = (koridor) => RAF_LIMITS[koridor] || RAF_LIMITS['109'];
-const getRafList = (koridor) => {
-  const { start, end } = getRafRange(koridor);
-  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
-};
-const isValidRaf = (koridor, rafNo) => {
-  const { start, end } = getRafRange(koridor);
-  return rafNo >= start && rafNo <= end;
-};
-
 /* ── LOKASYON SEÇİCİ ── */
 function LokPicker({ onSelect, currentLok }) {
   const [search, setSearch] = useState('');
@@ -53,9 +39,7 @@ function LokPicker({ onSelect, currentLok }) {
         const code = res[0].rawValue.trim();
         const m = code.match(/^A?(109|110)S?(\d{3})([A-F])$/i);
         if(m){
-          const rafNo = parseInt(m[2]);
-          if(!isValidRaf(m[1], rafNo)) return;
-          setKor(m[1]); setRaf(rafNo); setKat(m[3].toUpperCase());
+          setKor(m[1]); setRaf(parseInt(m[2])); setKat(m[3].toUpperCase());
           stopCam();
         }
       }
@@ -81,17 +65,14 @@ function LokPicker({ onSelect, currentLok }) {
     const katIdx = KATS.indexOf(kat);
     if(dir==='up' && katIdx<KATS.length-1){ setKat(KATS[katIdx+1]); }
     else if(dir==='down' && katIdx>0){ setKat(KATS[katIdx-1]); }
-    else if(dir==='right' && raf<getRafRange(kor).end){ setRaf(raf+1); }
-    else if(dir==='left' && raf>getRafRange(kor).start){ setRaf(raf-1); }
+    else if(dir==='right' && raf<117){ setRaf(raf+1); }
+    else if(dir==='left' && raf>1){ setRaf(raf-1); }
   };
 
   const handleSearch = (val) => {
     setSearch(val);
     const m = val.trim().match(/^A?(109|110)S?(\d{2,3})([A-F])$/i);
-    if(m){
-      const rafNo = parseInt(m[2]);
-      if(isValidRaf(m[1], rafNo)){ setKor(m[1]); setRaf(rafNo); setKat(m[3].toUpperCase()); }
-    }
+    if(m){ setKor(m[1]); setRaf(parseInt(m[2])); setKat(m[3].toUpperCase()); }
   };
 
   return (
@@ -142,10 +123,10 @@ function LokPicker({ onSelect, currentLok }) {
 
       {/* Raf */}
       <p style={{fontSize:11,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>
-        Raf {raf?`— ${raf}`:`(${getRafRange(kor).start}-${getRafRange(kor).end})`}
+        Raf {raf?`— ${raf}`:''}
       </p>
       <div style={{display:'grid',gridTemplateColumns:'repeat(8,1fr)',gap:4,maxHeight:160,overflowY:'auto',marginBottom:14}}>
-        {getRafList(kor).map(n=>(
+        {Array.from({length:114},(_,i)=>i+1).map(n=>(
           <button key={n} onClick={()=>{setRaf(n);setKat(null);}}
             style={{padding:'6px 0',border:'none',borderRadius:6,fontSize:11,fontWeight:600,cursor:'pointer',
               background:raf===n?'#1e40af':'#f1f5f9',color:raf===n?'#fff':'#475569'}}>
@@ -182,7 +163,7 @@ function LokPicker({ onSelect, currentLok }) {
 }
 
 /* ── SAYIM EKRANI ── */
-function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBack }) {
+function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], onSubmit, onBack }) {
   const { user, profile } = useAuth();
   const [entries, setEntries] = useState({});
   const [hasarlilar, setHasarlilar] = useState({});
@@ -342,7 +323,22 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
           </div>
         )}
 
-        {itemList.length===0&&<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'24px 0'}}>Henüz ürün taranmadı</p>}
+        {/* Mevcut lokasyon ürünleri referans */}
+      {lokMevcut.length>0&&(
+        <div style={{background:'#eff6ff',borderRadius:10,padding:'10px 12px',marginBottom:12,border:'1px solid #bfdbfe'}}>
+          <p style={{fontSize:11,fontWeight:700,color:'#1d4ed8',marginBottom:8,textTransform:'uppercase',letterSpacing:1}}>📍 Bu Lokasyondaki Mevcut Ürünler</p>
+          {lokMevcut.map((p,i)=>(
+            <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 0',borderBottom:i<lokMevcut.length-1?'1px solid #dbeafe':'none'}}>
+              <div style={{flex:1,minWidth:0}}>
+                <p style={{fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.urunAdi||'—'}</p>
+                <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{p.malzemeKodu}</p>
+              </div>
+              <span style={{fontSize:13,fontWeight:700,color:p.lokMiktar<=0?'#ef4444':'#1d4ed8',flexShrink:0}}>{p.lokMiktar??'—'} adet</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {itemList.length===0&&<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'16px 0'}}>Henüz ürün taranmadı</p>}
         {itemList.map(([ean,adet])=>{
           const p=products[ean]||{};
           const hasar=hasarlilar[ean]||0;
@@ -370,12 +366,13 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, onSubmit, onBa
 }
 
 /* ── ANA COMPONENT ── */
-export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
+export default function DepoSayimi() {
   const { user, profile } = useAuth();
   const isAdmin = profile?.role==='admin';
 
   const [view, setView] = useState('list');
   const [sessions, setSessions] = useState([]);
+  const [lokMevcut, setLokMevcut] = useState([]); // current products at selected location
   const [activeSession, setActiveSession] = useState(null);
   const [selectedLok, setSelectedLok] = useState(null);
   const [myEntries, setMyEntries] = useState([]);
@@ -395,8 +392,6 @@ export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
   const [vasList, setVasList] = useState([]);
 
   const toast$ = (msg,type='info') => setToast({msg,type,id:Date.now()});
-  const isMalKabulModule = defaultModule === 'mal_kabul';
-  const moduleSessionTip = isMalKabulModule ? 'mal_kabul' : 'genel';
 
   useEffect(()=>{
     getDocs(collection(db,'products')).then(snap=>{
@@ -444,6 +439,23 @@ export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
     }
     return true;
   };
+
+  const loadLokasyon = useCallback(async(lok) => {
+    if(!lok) return;
+    try {
+      const snap = await getDocs(query(collection(db,'products'), where('locations','array-contains',lok)));
+      const prods = snap.docs.map(d=>({id:d.id,...d.data()}));
+      const withStock = await Promise.all(prods.map(async p => {
+        if(!p.ean) return {...p, lokMiktar:null};
+        const s = await getDoc(doc(db,'stock',p.ean));
+        if(!s.exists()) return {...p, lokMiktar:null};
+        const lokM = s.data().byLocation?.[lok] ?? null;
+        const totM = s.data().miktar ?? null;
+        return {...p, lokMiktar: lokM !== null ? lokM : totM};
+      }));
+      setLokMevcut(withStock.sort((a,b)=>(a.urunAdi||'').localeCompare(b.urunAdi||'')));
+    } catch {}
+  },[]);
 
   const loadEntries = useCallback(async(sessionId)=>{
     const snap=await getDocs(query(collection(db,'countEntries'),where('sessionId','==',sessionId)));
@@ -594,37 +606,8 @@ export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
 
   /* ── VAS TAMAMLA → LOKASYONA ── */
   const loadVasItems = useCallback(async()=>{
-    const vasSnap=await getDocs(query(collection(db,'vasItems'),where('durum','==','etiketleme_bekliyor')));
-
-    // VAS'a ilk alındığında ürün sistemde yoksa sadece barkod kaydedilmiş olabilir.
-    // Bu yüzden liste açılırken products koleksiyonundan tekrar eşleştiriyoruz.
-    const productSnap=await getDocs(collection(db,'products'));
-    const productMap={};
-
-    productSnap.docs.forEach(d=>{
-      const p=d.data();
-      const ean=String(p.ean||'').trim();
-      const malzemeKodu=String(p.malzemeKodu||'').trim();
-
-      if(ean) productMap[ean]=p;
-      if(malzemeKodu) productMap[malzemeKodu]=p;
-    });
-
-    const enrichedVasList=vasSnap.docs.map(d=>{
-      const item={id:d.id,...d.data()};
-      const ean=String(item.ean||'').trim();
-      const malzemeKodu=String(item.malzemeKodu||'').trim();
-      const product=productMap[ean]||productMap[malzemeKodu];
-
-      return {
-        ...item,
-        ean:item.ean||product?.ean||'',
-        malzemeKodu:item.malzemeKodu||product?.malzemeKodu||'',
-        urunAdi:item.urunAdi||product?.urunAdi||item.ean||item.malzemeKodu||'Ürün'
-      };
-    });
-
-    setVasList(enrichedVasList);
+    const snap=await getDocs(query(collection(db,'vasItems'),where('durum','==','etiketleme_bekliyor')));
+    setVasList(snap.docs.map(d=>({id:d.id,...d.data()})));
   },[]);
 
   const vasLokasyonaGonder = async(vasItem,lokasyon) => {
@@ -674,6 +657,7 @@ export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
   if(view==='sayim'&&selectedLok&&activeSession){
     return <SayimEkrani lokasyon={selectedLok} sessionId={activeSession.id}
       sessionTip={activeSession.tip} products={products}
+      lokMevcut={lokMevcut}
       onSubmit={handleSayimSubmit}
       onBack={()=>{setSelectedLok(null);setView('genel_lok');}}/>;
   }
@@ -945,34 +929,35 @@ export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
   }
 
   /* ── LİST ── */
-  const visibleSessions = sessions.filter(s => s.tip === moduleSessionTip);
-  const aktifler=visibleSessions.filter(s=>s.durum==='aktif');
-  const bitmisler=visibleSessions.filter(s=>s.durum!=='aktif');
+  const aktifler=sessions.filter(s=>s.durum==='aktif');
+  const bitmisler=sessions.filter(s=>s.durum!=='aktif');
 
   return (
     <div>
       <div style={{background:'#0f172a',padding:'14px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-        <p style={{color:'#fff',fontWeight:700,fontSize:16}}>{isMalKabulModule ? '📥 Mal Kabul' : '🔢 Sayım'}</p>
-        {isMalKabulModule && (
-          <button onClick={()=>{loadVasItems();setView('vas_liste');}}
-            style={{...S.btn,background:'#7c3aed',color:'#fff',padding:'7px 12px',fontSize:12}}>
-            🏷️ VAS Listesi
-          </button>
-        )}
+        <p style={{color:'#fff',fontWeight:700,fontSize:16}}>🔢 Sayım</p>
+        <button onClick={()=>{loadVasItems();setView('vas_liste');}}
+          style={{...S.btn,background:'#7c3aed',color:'#fff',padding:'7px 12px',fontSize:12}}>
+          🏷️ VAS Listesi
+        </button>
       </div>
       <div style={{padding:16}}>
-        {isAdmin && !isMalKabulModule && (
+        {isAdmin&&(
           <div style={{display:'flex',gap:10,marginBottom:16}}>
             <button onClick={()=>startSession('genel')} disabled={loading}
               style={{...S.btn,flex:1,background:'#1e40af',color:'#fff'}}>
               📦 Genel Sayım Başlat
             </button>
+            <button onClick={()=>{setMkRef([]);setMkEntries([]);setVasItems({});setView('mal_kabul');}} disabled={loading}
+              style={{...S.btn,flex:1,background:'#7c3aed',color:'#fff'}}>
+              📥 Mal Kabul
+            </button>
           </div>
         )}
-        {isMalKabulModule && (
-          <button onClick={()=>{setMkRef([]);setMkEntries([]);setVasItems({});setView('mal_kabul');}} disabled={loading}
+        {!isAdmin&&(
+          <button onClick={()=>{setMkRef([]);setMkEntries([]);setVasItems({});setView('mal_kabul');}}
             style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',marginBottom:16}}>
-            📥 Mal Kabul Sayımı Başlat
+            📥 Mal Kabul Sayımı
           </button>
         )}
 
@@ -1024,10 +1009,10 @@ export default function DepoSayimi({ defaultModule = 'sayim' } = {}) {
           </>
         )}
 
-        {visibleSessions.length===0&&!loading&&(
+        {sessions.length===0&&!loading&&(
           <div style={{textAlign:'center',padding:'48px 0',color:'#94a3b8'}}>
-            <p style={{fontSize:32,marginBottom:8}}>{isMalKabulModule ? '📥' : '🔢'}</p>
-            <p style={{fontSize:14,fontWeight:600}}>{isMalKabulModule ? 'Henüz mal kabul yok' : 'Henüz sayım yok'}</p>
+            <p style={{fontSize:32,marginBottom:8}}>🔢</p>
+            <p style={{fontSize:14,fontWeight:600}}>Henüz sayım yok</p>
           </div>
         )}
       </div>
@@ -1042,10 +1027,8 @@ function VasCard({ item, onSend }) {
   const [showPicker, setShowPicker] = useState(false);
   return (
     <div style={{background:'#fff',borderRadius:14,padding:'14px 16px',border:'1px solid #e2e8f0',marginBottom:12}}>
-      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean||item.malzemeKodu}</p>
-      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>
-        {(item.malzemeKodu||item.ean)||'-'} · {item.adet} adet
-      </p>
+      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean}</p>
+      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>{item.malzemeKodu} · {item.adet} adet</p>
       {!showPicker?(
         <div style={{display:'flex',gap:8}}>
           <input value={lok} onChange={e=>setLok(e.target.value.toUpperCase())}
