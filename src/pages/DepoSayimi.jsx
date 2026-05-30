@@ -1,9 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { collection, addDoc, getDocs, getDoc, doc, updateDoc, deleteDoc,
-         query, where, orderBy, Timestamp, writeBatch } from 'firebase/firestore';
+         query, where, orderBy, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
-import * as XLSX from 'xlsx';
 
 function Toast({ msg, type, onDone }) {
   const bg={success:'#10b981',error:'#ef4444',warning:'#f59e0b',info:'#3b82f6'};
@@ -419,15 +418,6 @@ export default function DepoSayimi() {
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
   const [conflicts, setConflicts] = useState([]);
-  // Mal kabul
-  const [mkTur, setMkTur] = useState('manuel');
-  const [mkRef, setMkRef] = useState([]);
-  const [mkEntries, setMkEntries] = useState([]);
-  // VAS
-  const [vasItems, setVasItems] = useState({});
-  const [mkLokasyonlar, setMkLokasyonlar] = useState({}); // ean -> lokasyon (mal kabul direkt)
-  const [vasSessionId, setVasSessionId] = useState(null);
-  const [vasList, setVasList] = useState([]);
 
   const toast$ = (msg,type='info') => setToast({msg,type,id:Date.now()});
 
@@ -525,7 +515,7 @@ export default function DepoSayimi() {
       const s={id:ref.id,tip,durum:'aktif',baslatan:profile?.name||user?.email||'',baslangic:Timestamp.now()};
       setActiveSession(s);
       setSessions(prev=>[s,...prev]);
-      setView(tip==='genel'?'genel_lok':'mal_kabul');
+      setView('genel_lok');
     }catch(e){toast$('Hata: '+e.message,'error');}
     setLoading(false);
   };
@@ -544,137 +534,6 @@ export default function DepoSayimi() {
     setMyEntries(prev=>[...prev,{id:entryId,lokasyon:selectedLok,items,kullaniciId:user?.uid,kullanici:profile?.name||''}]);
     setSelectedLok(null);
     setView('genel_lok');
-  };
-
-  /* ── MAL KABUL REF PARSE ── */
-  const parseMkRef = (file) => {
-    const reader=new FileReader();
-    reader.onload=({target:{result}})=>{
-      try {
-        const wb=XLSX.read(new Uint8Array(result),{type:'array'});
-        const ws=wb.Sheets[wb.SheetNames[0]];
-        const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
-        let hIdx=0,cCode=-1,cUrun=-1,cAdet=-1,cEan=-1;
-        for(let r=0;r<Math.min(rows.length,10);r++){
-          const cells=rows[r].map(c=>String(c||'').toLowerCase().replace(/\s+/g,' ').trim());
-          let found=false;
-          cells.forEach((cell,j)=>{
-            if(/(malzeme|ürün kodu|elis|item)\s*(kodu?|code?)?/.test(cell)&&cCode<0){cCode=j;found=true;}
-            if(/ean|barkod/.test(cell)&&cEan<0){cEan=j;found=true;}
-            if(/ürün adı|sistem/.test(cell)&&cUrun<0){cUrun=j;found=true;}
-            if(/miktar|adet|qty|toplam/.test(cell)&&cAdet<0){cAdet=j;found=true;}
-          });
-          if(found&&cAdet>=0){hIdx=r;break;}
-        }
-        const refData=[];
-        rows.slice(hIdx+1).forEach(row=>{
-          const kod=cCode>=0?String(row[cCode]||'').trim():'';
-          const adet=parseInt(String(row[cAdet]||'0').replace(/\D/g,''))||0;
-          if(!kod||adet<=0) return;
-          refData.push({malzemeKodu:kod,urunAdi:cUrun>=0?String(row[cUrun]||'').trim():'',ean:cEan>=0?String(row[cEan]||'').trim():'',beklenenAdet:adet});
-        });
-        setMkRef(refData);
-        toast$(`${refData.length} kalem referans yüklendi`,'success');
-      }catch(e){toast$('Dosya hatası: '+e.message,'error');}
-    };
-    reader.readAsArrayBuffer(file);
-  };
-
-  /* ── MAL KABUL ONAY + VAS AYRIMI ── */
-  const malKabulOnayla = async(vasMap, lokasyonlarMap) => {
-    if(!activeSession) return;
-    setLoading(true);
-    try {
-      const snap=await getDocs(query(collection(db,'countEntries'),where('sessionId','==',activeSession.id)));
-      const allItems={};
-      snap.docs.forEach(d=>{
-        (d.data().items||[]).forEach(item=>{
-          const key=item.malzemeKodu||item.ean;
-          if(!allItems[key]) allItems[key]={...item,adet:0,hasarliAdet:0};
-          allItems[key].adet+=item.adet;
-          allItems[key].hasarliAdet+=(item.hasarliAdet||0);
-        });
-      });
-
-      const now=Timestamp.now();
-      const stockSnap=await getDocs(collection(db,'stock'));
-      const stockMap={};
-      stockSnap.docs.forEach(d=>{stockMap[d.id]=d.data();});
-
-      const batch=writeBatch(db);
-      const movBatch=writeBatch(db);
-      const vasItemsToSave=[];
-
-      Object.values(allItems).forEach(item=>{
-        if(!item.ean) return;
-        const vasAdet=vasMap[item.ean||item.malzemeKodu]||0;
-        const lokAdet=item.adet-vasAdet;
-        const prev=(stockMap[item.ean]?.miktar)||0;
-        const next=prev+item.adet;
-        const lok=lokasyonlarMap[item.ean]||lokasyonlarMap[item.malzemeKodu]||'';
-        const prevByLok=stockMap[item.ean]?.byLocation||{};
-        const newByLok=lok&&lokAdet>0?{...prevByLok,[lok]:(prevByLok[lok]||0)+lokAdet}:prevByLok;
-
-        batch.set(doc(db,'stock',item.ean),{ean:item.ean,miktar:next,
-          urunAdi:item.urunAdi||'',malzemeKodu:item.malzemeKodu||'',
-          byLocation:newByLok,sonGuncelleme:now},{merge:true});
-
-        movBatch.set(doc(collection(db,'stockMovements')),{
-          tarih:now,tip:'mal_kabul',ean:item.ean,
-          malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',
-          miktar:item.adet,oncekiMiktar:prev,sonrakiMiktar:next,
-          hasarliAdet:item.hasarliAdet||0,
-          vasAdet,lokAdet,
-          kaynak:`mal_kabul:${activeSession.id}`,
-          yapan:profile?.name||user?.email||'',yapanId:user?.uid||''
-        });
-
-        if(vasAdet>0){
-          vasItemsToSave.push({ean:item.ean,malzemeKodu:item.malzemeKodu||'',
-            urunAdi:item.urunAdi||'',adet:vasAdet,
-            sessionId:activeSession.id,durum:'etiketleme_bekliyor',tarih:now});
-        }
-      });
-
-      await batch.commit();
-      await movBatch.commit();
-
-      // VAS kayıtları
-      for(const vi of vasItemsToSave){
-        await addDoc(collection(db,'vasItems'),vi);
-      }
-
-      await updateDoc(doc(db,'countSessions',activeSession.id),{durum:'tamamlandi',bitis:now});
-      toast$('Mal kabul stoğa eklendi ✓','success');
-      setView('list');
-      loadSessions();
-    }catch(e){toast$('Hata: '+e.message,'error');}
-    setLoading(false);
-  };
-
-  /* ── VAS TAMAMLA → LOKASYONA ── */
-  const loadVasItems = useCallback(async()=>{
-    const snap=await getDocs(query(collection(db,'vasItems'),where('durum','==','etiketleme_bekliyor')));
-    setVasList(snap.docs.map(d=>({id:d.id,...d.data()})));
-  },[]);
-
-  const vasLokasyonaGonder = async(vasItem,lokasyon) => {
-    if(!lokasyon){toast$('Lokasyon seçin','error');return;}
-    try {
-      const now=Timestamp.now();
-      const stockSnap=await getDocs(query(collection(db,'stock'),where('ean','==',vasItem.ean)));
-      const prev=stockSnap.empty?0:(stockSnap.docs[0].data().miktar||0);
-      await updateDoc(doc(db,'vasItems',vasItem.id),{durum:'tamamlandi',lokasyon,bitis:now});
-      await addDoc(collection(db,'stockMovements'),{
-        tarih:now,tip:'vas_lokasyon',ean:vasItem.ean,
-        malzemeKodu:vasItem.malzemeKodu||'',urunAdi:vasItem.urunAdi||'',
-        miktar:0,oncekiMiktar:prev,sonrakiMiktar:prev,
-        lokasyon,kaynak:`vas:${vasItem.id}`,
-        yapan:profile?.name||user?.email||'',yapanId:user?.uid||''
-      });
-      setVasList(prev=>prev.filter(v=>v.id!==vasItem.id));
-      toast$('VAS → Lokasyona taşındı ✓','success');
-    }catch(e){toast$('Hata: '+e.message,'error');}
   };
 
   /* ── EXPORT ── */
@@ -711,13 +570,6 @@ export default function DepoSayimi() {
       onBack={()=>{setView('genel_lok');}}/>;
   }
 
-  if(view==='mk_sayim'&&activeSession){
-    return <SayimEkrani lokasyon="MAL_KABUL" sessionId={activeSession.id}
-      sessionTip="mal_kabul" products={products}
-      onSubmit={(id,items)=>{setMkEntries(prev=>[...prev,{id,items}]);setView('mk_ozet');}}
-      onBack={()=>setView('mk_ozet')}/>;
-  }
-
   /* ── GENEL SAYIM LOK SEÇ ── */
   if(view==='genel_lok'&&activeSession){
     const saydim=myEntries.map(e=>e.lokasyon);
@@ -747,177 +599,6 @@ export default function DepoSayimi() {
           </div>
         )}
         <LokPicker onSelect={selectLokasyon} currentLok={lastLok||saydim[saydim.length-1]} />
-      </div>
-    );
-  }
-
-  /* ── MAL KABUL BAŞLANGIÇ ── */
-  if(view==='mal_kabul'){
-    return (
-      <div>
-        <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
-          <button onClick={()=>setView('list')} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
-          <p style={{color:'#fff',fontWeight:700,fontSize:14}}>📥 Mal Kabul</p>
-        </div>
-        <div style={{padding:16}}>
-          <div style={S.card}>
-            <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:10}}>Sayım Türü</p>
-            <div style={{display:'flex',gap:10}}>
-              {[['manuel','Manuel'],['referansli','Referanslı']].map(([t,l])=>(
-                <button key={t} onClick={()=>setMkTur(t)}
-                  style={{...S.btn,flex:1,background:mkTur===t?'#1e40af':'#f1f5f9',color:mkTur===t?'#fff':'#475569'}}>
-                  {l}
-                </button>
-              ))}
-            </div>
-          </div>
-          {mkTur==='referansli'&&(
-            <div style={S.card}>
-              <p style={{fontSize:13,fontWeight:700,marginBottom:8}}>Referans Dosyası</p>
-              {mkRef.length>0
-                ?<div style={{display:'flex',alignItems:'center',gap:10}}>
-                  <p style={{fontSize:12,color:'#10b981',fontWeight:600,flex:1}}>✅ {mkRef.length} kalem</p>
-                  <button onClick={()=>setMkRef([])} style={{...S.btn,background:'#fee2e2',color:'#ef4444',padding:'6px 12px',fontSize:12}}>Değiştir</button>
-                </div>
-                :<label style={{...S.btn,background:'#f1f5f9',color:'#475569',display:'inline-block',cursor:'pointer'}}>
-                  📂 Dosya Seç
-                  <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>{if(e.target.files[0])parseMkRef(e.target.files[0]);e.target.value='';}} />
-                </label>
-              }
-            </div>
-          )}
-          <button onClick={()=>{if(!activeSession)startSession('mal_kabul');else setView('mk_sayim');}}
-            disabled={mkTur==='referansli'&&mkRef.length===0}
-            style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',opacity:(mkTur==='referansli'&&mkRef.length===0)?.5:1}}>
-            Sayıma Başla →
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  /* ── MAL KABUL ÖZET + VAS AYRIMI ── */
-  if(view==='mk_ozet'&&activeSession){
-    const allItems={};
-    mkEntries.forEach(e=>{
-      (e.items||[]).forEach(item=>{
-        const key=item.malzemeKodu||item.ean;
-        if(!allItems[key]) allItems[key]={...item,adet:0,hasarliAdet:0};
-        allItems[key].adet+=item.adet;
-        allItems[key].hasarliAdet+=(item.hasarliAdet||0);
-      });
-    });
-    const itemList=Object.values(allItems);
-    const toplam=itemList.reduce((a,i)=>a+i.adet,0);
-    const toplamHasar=itemList.reduce((a,i)=>a+(i.hasarliAdet||0),0);
-
-    const refMap=Object.fromEntries(mkRef.map(r=>[r.malzemeKodu,r]));
-    const tamEslesen=mkRef.length>0&&itemList.every(item=>{
-      const ref=refMap[item.malzemeKodu];
-      return ref&&ref.beklenenAdet===item.adet;
-    });
-
-    return (
-      <div>
-        <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
-          <button onClick={()=>setView('mk_sayim')} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
-          <p style={{color:'#fff',fontWeight:700,fontSize:14}}>📥 Mal Kabul Özeti</p>
-        </div>
-        <div style={{padding:16}}>
-          <div style={{...S.card,background:'#f0fdf4',border:'1px solid #bbf7d0'}}>
-            <p style={{fontSize:12,fontWeight:700,color:'#15803d'}}>📊 Özet</p>
-            <p style={{fontSize:12,color:'#166534',marginTop:4}}>{itemList.length} kalem · {toplam.toLocaleString()} adet{toplamHasar>0?` · ⚠️ ${toplamHasar} hasarlı`:''}</p>
-            {tamEslesen&&<p style={{fontSize:12,color:'#10b981',marginTop:4,fontWeight:600}}>✅ Referans ile tam eşleşme</p>}
-            {mkRef.length>0&&!tamEslesen&&<p style={{fontSize:12,color:'#d97706',marginTop:4,fontWeight:600}}>⚠️ Referans ile fark var</p>}
-          </div>
-
-          {/* VAS Ayrımı */}
-          {itemList.length>0&&(
-            <div style={S.card}>
-              <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:4}}>VAS / Lokasyon Ayrımı</p>
-              <p style={{fontSize:11,color:'#64748b',marginBottom:10}}>VAS'a gidecek ürünlerin adetlerini girin (0 = direkt lokasyona)</p>
-              {itemList.map((item,i)=>(
-                <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:'1px solid #f1f5f9'}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <p style={{fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
-                    <p style={{fontSize:10,color:'#94a3b8'}}>Toplam: {item.adet}{item.hasarliAdet>0?` · ⚠️${item.hasarliAdet} hasarlı`:''}</p>
-                  </div>
-                  <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
-                    <span style={{fontSize:11,color:'#7c3aed',fontWeight:600}}>VAS:</span>
-                    <input type="number" min="0" max={item.adet}
-                      value={vasItems[item.ean||item.malzemeKodu]||0}
-                      onChange={e=>setVasItems(prev=>({...prev,[item.ean||item.malzemeKodu]:Math.min(item.adet,Math.max(0,parseInt(e.target.value)||0))}))}
-                      style={{width:52,textAlign:'center',border:'1px solid #ddd8fe',borderRadius:7,padding:'4px',fontSize:13,fontWeight:700}} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Lokasyon girişi — VAS'a gitmeyenler için */}
-          {itemList.filter(item=>(vasItems[item.ean||item.malzemeKodu]||0)<item.adet).length>0&&(
-            <div style={S.card}>
-              <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:4}}>📍 Lokasyon Ata</p>
-              <p style={{fontSize:11,color:'#64748b',marginBottom:10}}>Direkt lokasyona gidecek ürünler için lokasyon girin</p>
-              {/* Toplu uygula */}
-              <div style={{background:'#eff6ff',borderRadius:8,padding:'8px 10px',marginBottom:10}}>
-                <p style={{fontSize:11,fontWeight:600,color:'#1d4ed8',marginBottom:5}}>Tümüne aynı lokasyon:</p>
-                <input placeholder="A109S013B" style={{width:'100%',padding:'7px 10px',border:'1px solid #bfdbfe',borderRadius:7,fontSize:13,fontFamily:'monospace',outline:'none',boxSizing:'border-box'}}
-                  onChange={e=>{
-                    const lok=e.target.value.trim().toUpperCase();
-                    if(!lok) return;
-                    const newLoks={...mkLokasyonlar};
-                    itemList.forEach(item=>{
-                      if((vasItems[item.ean||item.malzemeKodu]||0)<item.adet)
-                        newLoks[item.ean||item.malzemeKodu]=lok;
-                    });
-                    setMkLokasyonlar(newLoks);
-                  }} />
-              </div>
-              {itemList.filter(item=>(vasItems[item.ean||item.malzemeKodu]||0)<item.adet).map((item,i)=>(
-                <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 0',borderBottom:'1px solid #f1f5f9'}}>
-                  <p style={{flex:1,fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-                    {item.urunAdi||item.malzemeKodu}
-                  </p>
-                  <input placeholder="Lokasyon"
-                    value={mkLokasyonlar[item.ean||item.malzemeKodu]||''}
-                    onChange={e=>setMkLokasyonlar(prev=>({...prev,[item.ean||item.malzemeKodu]:e.target.value.trim().toUpperCase()}))}
-                    style={{width:110,padding:'5px 8px',border:'1px solid #e2e8f0',borderRadius:7,fontSize:11,fontFamily:'monospace',outline:'none',
-                      background:mkLokasyonlar[item.ean||item.malzemeKodu]?'#f0fdf4':'#fff'}} />
-                </div>
-              ))}
-            </div>
-          )}
-
-          <button onClick={()=>setView('mk_sayim')}
-            style={{...S.btn,width:'100%',background:'#3b82f6',color:'#fff',marginBottom:10}}>
-            ➕ Daha Fazla Ürün Say
-          </button>
-          {isAdmin&&(
-            <button onClick={()=>{ const missing=itemList.find(i=>!mkLokasyonlar[i.ean||i.malzemeKodu]&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet); if(missing){alert((missing.urunAdi||missing.malzemeKodu)+' için lokasyon giriniz');return;} malKabulOnayla(vasItems,mkLokasyonlar);}} disabled={loading||itemList.length===0}
-              style={{...S.btn,width:'100%',background:'#10b981',color:'#fff',opacity:loading?.6:1}}>
-              {loading?'Ekleniyor...':'✅ Onayla ve Stoğa Ekle'}
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  /* ── VAS LİSTESİ ── */
-  if(view==='vas_liste'){
-    return (
-      <div>
-        <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
-          <button onClick={()=>setView('list')} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
-          <p style={{color:'#fff',fontWeight:700,fontSize:14}}>🏷️ VAS — Etiketleme Bekleyenler</p>
-        </div>
-        <div style={{padding:16}}>
-          {vasList.length===0&&<p style={{color:'#94a3b8',textAlign:'center',padding:'32px 0'}}>VAS'ta bekleyen ürün yok</p>}
-          {vasList.map(item=>(
-            <VasCard key={item.id} item={item} onSend={vasLokasyonaGonder} />
-          ))}
-        </div>
       </div>
     );
   }
@@ -978,17 +659,13 @@ export default function DepoSayimi() {
   }
 
   /* ── LİST ── */
-  const aktifler=sessions.filter(s=>s.durum==='aktif');
-  const bitmisler=sessions.filter(s=>s.durum!=='aktif');
+  const aktifler=sessions.filter(s=>s.durum==='aktif'&&s.tip==='genel');
+  const bitmisler=sessions.filter(s=>s.durum!=='aktif'&&s.tip==='genel');
 
   return (
     <div>
       <div style={{background:'#0f172a',padding:'14px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
         <p style={{color:'#fff',fontWeight:700,fontSize:16}}>🔢 Sayım</p>
-        <button onClick={()=>{loadVasItems();setView('vas_liste');}}
-          style={{...S.btn,background:'#7c3aed',color:'#fff',padding:'7px 12px',fontSize:12}}>
-          🏷️ VAS Listesi
-        </button>
       </div>
       <div style={{padding:16}}>
         {isAdmin&&(
@@ -997,17 +674,7 @@ export default function DepoSayimi() {
               style={{...S.btn,flex:1,background:'#1e40af',color:'#fff'}}>
               📦 Genel Sayım Başlat
             </button>
-            <button onClick={()=>{setMkRef([]);setMkEntries([]);setVasItems({});setView('mal_kabul');}} disabled={loading}
-              style={{...S.btn,flex:1,background:'#7c3aed',color:'#fff'}}>
-              📥 Mal Kabul
-            </button>
           </div>
-        )}
-        {!isAdmin&&(
-          <button onClick={()=>{setMkRef([]);setMkEntries([]);setVasItems({});setView('mal_kabul');}}
-            style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',marginBottom:16}}>
-            📥 Mal Kabul Sayımı
-          </button>
         )}
 
         {aktifler.length>0&&(
@@ -1017,10 +684,10 @@ export default function DepoSayimi() {
               <div key={s.id} style={{...S.card,border:'1px solid #bfdbfe',background:'#eff6ff'}}>
                 <div style={{display:'flex',alignItems:'center',gap:10}}>
                   <div style={{flex:1}}>
-                    <p style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>{s.tip==='genel'?'📦 Genel Sayım':'📥 Mal Kabul'}</p>
+                    <p style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>📦 Genel Sayım</p>
                     <p style={{fontSize:11,color:'#64748b'}}>{s.baslatan} · {s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||''}</p>
                   </div>
-                  <button onClick={()=>{setActiveSession(s);loadEntries(s.id);setView(s.tip==='genel'?'genel_lok':'mk_ozet');}}
+                  <button onClick={()=>{setActiveSession(s);loadEntries(s.id);setView('genel_lok');}}
                     style={{...S.btn,background:'#1e40af',color:'#fff',padding:'8px 14px',fontSize:12}}>
                     {s.baslantanId===user?.uid?'Devam →':'Katıl →'}
                   </button>
@@ -1043,10 +710,10 @@ export default function DepoSayimi() {
               <div key={s.id} style={S.card}>
                 <div style={{display:'flex',alignItems:'center',gap:10}}>
                   <div style={{flex:1}}>
-                    <p style={{fontSize:13,fontWeight:600,color:'#475569'}}>{s.tip==='genel'?'📦 Genel Sayım':'📥 Mal Kabul'}</p>
+                    <p style={{fontSize:13,fontWeight:600,color:'#475569'}}>📦 Genel Sayım</p>
                     <p style={{fontSize:11,color:'#94a3b8'}}>{s.baslatan} · {s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||''}</p>
                   </div>
-                  {isAdmin&&s.tip==='genel'&&(
+                  {isAdmin&&(
                     <button onClick={()=>exportGenelSayim(s.id)}
                       style={{...S.btn,background:'#f1f5f9',color:'#475569',padding:'6px 10px',fontSize:11}}>
                       ⬇️ Excel
@@ -1066,37 +733,6 @@ export default function DepoSayimi() {
         )}
       </div>
       {toast&&<Toast {...toast} onDone={()=>setToast(null)} />}
-    </div>
-  );
-}
-
-/* ── VAS KART ── */
-function VasCard({ item, onSend }) {
-  const [lok, setLok] = useState('');
-  const [showPicker, setShowPicker] = useState(false);
-  return (
-    <div style={{background:'#fff',borderRadius:14,padding:'14px 16px',border:'1px solid #e2e8f0',marginBottom:12}}>
-      <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean}</p>
-      <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace',marginBottom:8}}>{item.malzemeKodu} · {item.adet} adet</p>
-      {!showPicker?(
-        <div style={{display:'flex',gap:8}}>
-          <input value={lok} onChange={e=>setLok(e.target.value.toUpperCase())}
-            placeholder="Lokasyon (örn: A109S013B)"
-            style={{flex:1,padding:'8px 12px',border:'1px solid #e2e8f0',borderRadius:8,fontSize:13,outline:'none',fontFamily:'monospace'}} />
-          <button onClick={()=>setShowPicker(true)}
-            style={{background:'#f1f5f9',border:'none',borderRadius:8,padding:'8px 10px',cursor:'pointer',fontSize:13}}>
-            📍
-          </button>
-          <button onClick={()=>onSend(item,lok)} disabled={!lok}
-            style={{background:'#10b981',border:'none',borderRadius:8,color:'#fff',padding:'8px 14px',fontSize:13,fontWeight:600,cursor:'pointer',opacity:!lok?.5:1}}>
-            Gönder ✓
-          </button>
-        </div>
-      ):(
-        <div>
-          <LokPicker onSelect={l=>{setLok(l);setShowPicker(false);}} />
-        </div>
-      )}
     </div>
   );
 }
