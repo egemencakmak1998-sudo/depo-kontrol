@@ -636,7 +636,19 @@ export default function MalKabul() {
         if(item.eksikKabul)return; // eksik stoğa girmez
         const vasAdet=vasItems[item.ean||item.malzemeKodu]||0;
         const lokAdet=item.adet-vasAdet;
-        if(lokAdet<=0)return; // tamamı VAS'a gidiyorsa şimdi stoğa yazma
+
+        // VAS'a giden kısım: stoğa GİRMEZ, VAS listesine eklenir
+        if(vasAdet>0)vasItemsToSave.push({
+          ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',adet:vasAdet,
+          sessionId:activeSession.id,durum:'etiketleme_bekliyor',tarih:now,
+          mkSessionAdi:activeSession.sessionAdi||'Mal Kabul',
+          mkTarih:now,
+          mkIrsaliyeNo:activeSession.irsaliyeNo||'',
+          mkBaslatan:activeSession.baslatan||profile?.name||user?.email||'',
+        });
+
+        // Lokasyona giden kısım: stoğa eklenir
+        if(lokAdet<=0)return; // tamamı VAS'a gidiyorsa stoğa yazma
         const prev=(stockMap[item.ean]?.miktar)||0;
         const next=prev+lokAdet;
         const lok=mkLokasyonlar[item.ean]||mkLokasyonlar[item.malzemeKodu]||'';
@@ -644,7 +656,6 @@ export default function MalKabul() {
         const newByLok=lok&&lokAdet>0?{...prevByLok,[lok]:(prevByLok[lok]||0)+lokAdet}:prevByLok;
         batch.set(doc(db,'stock',item.ean),{ean:item.ean,miktar:next,urunAdi:item.urunAdi||'',malzemeKodu:item.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
         movBatch.set(doc(collection(db,'stockMovements')),{tarih:now,tip:'mal_kabul',ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',miktar:lokAdet,oncekiMiktar:prev,sonrakiMiktar:next,hasarliAdet:item.hasarliAdet||0,vasAdet,lokAdet,kaynak:`mal_kabul:${activeSession.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
-        if(vasAdet>0)vasItemsToSave.push({ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',adet:vasAdet,sessionId:activeSession.id,durum:'etiketleme_bekliyor',tarih:now});
       });
       await batch.commit();await movBatch.commit();
       for(const vi of vasItemsToSave)await addDoc(collection(db,'vasItems'),vi);
@@ -664,11 +675,21 @@ export default function MalKabul() {
     const sessionInfoMap={};
     await Promise.all(sessionIds.map(async sid=>{
       try{const sSnap=await getDocs(query(collection(db,'countSessions'),where('__name__','==',sid)));
-
-        if(!sSnap.empty){const s=sSnap.docs[0].data();sessionInfoMap[sid]={baslatan:s.baslatan||'',tarih:s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||'',mkTur:s.mkTur||'manuel',sessionAdi:s.sessionAdi||''};}
+        if(!sSnap.empty){const s=sSnap.docs[0].data();sessionInfoMap[sid]={baslatan:s.baslatan||'',tarih:s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||'',mkTur:s.mkTur||'manuel',sessionAdi:s.sessionAdi||'',irsaliyeNo:s.irsaliyeNo||''};}
       }catch{}
     }));
-    setVasList(items.map(i=>({...i,_sessionInfo:sessionInfoMap[i.sessionId]||null})));
+    setVasList(items.map(i=>{
+      const sInfo=sessionInfoMap[i.sessionId]||null;
+      const fmtMk=(()=>{try{return i.mkTarih?.toDate?.()?.toLocaleDateString('tr-TR')||'';}catch{return '';}})();
+      // VAS kaydındaki kaynak alanlarını öncele, yoksa session'dan al
+      return {...i,_sessionInfo:{
+        baslatan:i.mkBaslatan||sInfo?.baslatan||'',
+        tarih:fmtMk||sInfo?.tarih||'',
+        mkTur:sInfo?.mkTur||'manuel',
+        sessionAdi:i.mkSessionAdi||sInfo?.sessionAdi||'Mal Kabul',
+        irsaliyeNo:i.mkIrsaliyeNo||sInfo?.irsaliyeNo||'',
+      }};
+    }));
   },[]);
 
   const vasLokasyonaGonder=async(vasItem,lokasyon)=>{
@@ -766,9 +787,14 @@ export default function MalKabul() {
     const allItems={};
     mkEntries.forEach(e=>{(e.items||[]).forEach(item=>{const key=item.malzemeKodu||item.ean;if(!allItems[key])allItems[key]={...item,adet:0,hasarliAdet:0,eksikKabul:false};allItems[key].adet+=item.adet;allItems[key].hasarliAdet+=(item.hasarliAdet||0);if(item.eksikKabul)allItems[key].eksikKabul=true;});});
     const itemList=Object.values(allItems);
-    const toplam=itemList.filter(i=>!i.eksikKabul).reduce((a,i)=>a+i.adet,0);
-    const toplamHasar=itemList.reduce((a,i)=>a+(i.hasarliAdet||0),0);
     const eksikItems=itemList.filter(i=>i.eksikKabul);
+    // VAS'a gidecek ürünler: vasItems map'inde adet>0 olanlar
+    const vasItemsList=itemList.filter(i=>!i.eksikKabul&&(vasItems[i.ean||i.malzemeKodu]||0)>0);
+    // Lokasyona gidecek (normal) ürünler: VAS değil, eksik değil
+    const lokItemsList=itemList.filter(i=>!i.eksikKabul&&(vasItems[i.ean||i.malzemeKodu]||0)<=0);
+    const toplam=lokItemsList.reduce((a,i)=>a+i.adet,0);
+    const vasToplam=vasItemsList.reduce((a,i)=>a+(vasItems[i.ean||i.malzemeKodu]||0),0);
+    const toplamHasar=itemList.reduce((a,i)=>a+(i.hasarliAdet||0),0);
     const refMap=Object.fromEntries(mkRef.map(r=>[r.malzemeKodu,r]));
     const tamEslesen=mkRef.length>0&&itemList.filter(i=>!i.eksikKabul).every(i=>{const r=refMap[i.malzemeKodu];return r&&r.beklenenAdet===i.adet;});
     return(
@@ -779,11 +805,15 @@ export default function MalKabul() {
         </div>
         <div style={{padding:16}}>
           <div style={{...S.card,background:'#f0fdf4',border:'1px solid #bbf7d0'}}>
-            <p style={{fontSize:13,fontWeight:700,color:'#15803d'}}>📊 {itemList.length} kalem · {toplam.toLocaleString()} adet stoğa girecek{toplamHasar>0?` · ⚠️ ${toplamHasar} hasarlı`:''}</p>
-            {eksikItems.length>0&&<p style={{fontSize:12,color:'#dc2626',marginTop:4,fontWeight:600}}>🔒 {eksikItems.length} kalem eksik kabul — stoğa girmeyecek</p>}
+            <p style={{fontSize:13,fontWeight:700,color:'#15803d'}}>📊 Özet</p>
+            <p style={{fontSize:12,color:'#166534',marginTop:4}}>📍 {lokItemsList.length} kalem · {toplam.toLocaleString()} adet → stoğa girecek</p>
+            {vasItemsList.length>0&&<p style={{fontSize:12,color:'#7c3aed',marginTop:2,fontWeight:600}}>🏷️ {vasItemsList.length} kalem · {vasToplam.toLocaleString()} adet → VAS listesine gidecek (stoğa girmez)</p>}
+            {eksikItems.length>0&&<p style={{fontSize:12,color:'#dc2626',marginTop:2,fontWeight:600}}>🔒 {eksikItems.length} kalem eksik kabul — stoğa girmeyecek</p>}
+            {toplamHasar>0&&<p style={{fontSize:12,color:'#d97706',marginTop:2}}>⚠️ {toplamHasar} hasarlı adet</p>}
             {tamEslesen&&<p style={{fontSize:12,color:'#10b981',marginTop:4,fontWeight:600}}>✅ Referans ile tam eşleşme</p>}
             {mkRef.length>0&&!tamEslesen&&<p style={{fontSize:12,color:'#d97706',marginTop:4,fontWeight:600}}>⚠️ Referans ile fark var</p>}
           </div>
+
           {eksikItems.length>0&&(
             <div style={{...S.card,border:'1px solid #fca5a5',background:'#fff1f2'}}>
               <p style={{fontSize:12,fontWeight:700,color:'#dc2626',marginBottom:8}}>🔒 Eksik Kabul — Stoğa Girmeyecek</p>
@@ -795,39 +825,56 @@ export default function MalKabul() {
               ))}
             </div>
           )}
-          {itemList.filter(i=>!i.eksikKabul).length>0&&(
-            <div style={S.card}>
-              <p style={{fontSize:13,fontWeight:700,marginBottom:4}}>🏷️ VAS Transfer</p>
-              <p style={{fontSize:11,color:'#64748b',marginBottom:10}}>Etiketlenecek ürünleri seç</p>
-              {itemList.filter(i=>!i.eksikKabul).map((item,i)=>{
-                const key=item.ean||item.malzemeKodu;const sel=(vasItems[key]||0)>=item.adet;
-                return(<div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:'1px solid #f1f5f9'}}>
-                  <div style={{flex:1,minWidth:0}}><p style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p><p style={{fontSize:10,color:'#94a3b8'}}>{item.adet} adet{sel?' · 🏷️ VAS':''}</p></div>
-                  <button onClick={()=>setVasItems(prev=>({...prev,[key]:sel?0:item.adet}))} style={{...S.btn,background:sel?'#7c3aed':'#f1f5f9',color:sel?'#fff':'#475569',padding:'6px 10px',fontSize:12}}>{sel?'↩ İptal':'VAS →'}</button>
+
+          {/* VAS'a gidecek ürünler — salt görünür, lokasyon atanmaz */}
+          {vasItemsList.length>0&&(
+            <div style={{...S.card,border:'1px solid #ddd6fe',background:'#faf5ff'}}>
+              <p style={{fontSize:13,fontWeight:700,color:'#7c3aed',marginBottom:4}}>🏷️ VAS Listesine Gidecek</p>
+              <p style={{fontSize:11,color:'#7c3aed',marginBottom:10,opacity:.8}}>Bu ürünler stoğa alınmaz. Tamamlandığında VAS listesine düşer, lokasyon atama orada yapılır.</p>
+              {vasItemsList.map((item,i)=>{
+                const key=item.ean||item.malzemeKodu;
+                return(<div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:i<vasItemsList.length-1?'1px solid #ede9fe':'none'}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <p style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
+                    <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{item.malzemeKodu||''}{item.malzemeKodu&&item.ean?' · ':''}{item.ean} · {vasItems[key]} adet</p>
+                  </div>
+                  <button onClick={()=>setVasItems(prev=>({...prev,[key]:0}))} title="VAS'tan çıkar, lokasyona al"
+                    style={{...S.btn,background:'#f1f5f9',color:'#475569',padding:'6px 10px',fontSize:11}}>↩ Lokasyona Al</button>
                 </div>);
               })}
             </div>
           )}
-          {itemList.filter(i=>!i.eksikKabul&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet).length>0&&(
+
+          {/* Lokasyona gidecek ürünler — VAS işaretle + lokasyon ata */}
+          {lokItemsList.length>0&&(
             <div style={S.card}>
-              <p style={{fontSize:13,fontWeight:700,marginBottom:4}}>📍 Lokasyon Ata</p>
+              <p style={{fontSize:13,fontWeight:700,marginBottom:4}}>📍 Lokasyon Ata (Stoğa Girecek)</p>
+              <p style={{fontSize:11,color:'#64748b',marginBottom:10}}>İstersen ürünü 🏷️ ile VAS listesine de gönderebilirsin</p>
               <div style={{background:'#eff6ff',borderRadius:8,padding:'8px 10px',marginBottom:10}}>
                 <p style={{fontSize:11,fontWeight:600,color:'#1d4ed8',marginBottom:5}}>Tümüne aynı lokasyon:</p>
                 <input placeholder="A109S013B" style={{width:'100%',padding:'7px 10px',border:'1px solid #bfdbfe',borderRadius:7,fontSize:13,fontFamily:'monospace',outline:'none',boxSizing:'border-box'}}
-                  onChange={e=>{const lok=e.target.value.trim().toUpperCase();if(!lok)return;const n={...mkLokasyonlar};itemList.filter(i=>!i.eksikKabul&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet).forEach(i=>{n[i.ean||i.malzemeKodu]=lok;});setMkLokasyonlar(n);}}/>
+                  onChange={e=>{const lok=e.target.value.trim().toUpperCase();if(!lok)return;const n={...mkLokasyonlar};lokItemsList.forEach(i=>{n[i.ean||i.malzemeKodu]=lok;});setMkLokasyonlar(n);}}/>
               </div>
-              {itemList.filter(i=>!i.eksikKabul&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet).map((item,i)=>(
-                <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 0',borderBottom:'1px solid #f1f5f9'}}>
-                  <p style={{flex:1,fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
-                  <input placeholder="Lokasyon" value={mkLokasyonlar[item.ean||item.malzemeKodu]||''}
-                    onChange={e=>setMkLokasyonlar(prev=>({...prev,[item.ean||item.malzemeKodu]:e.target.value.trim().toUpperCase()}))}
-                    style={{width:110,padding:'5px 8px',border:'1px solid #e2e8f0',borderRadius:7,fontSize:11,fontFamily:'monospace',outline:'none',background:mkLokasyonlar[item.ean||item.malzemeKodu]?'#f0fdf4':'#fff'}}/>
+              {lokItemsList.map((item,i)=>{
+                const key=item.ean||item.malzemeKodu;
+                return(
+                <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 0',borderBottom:i<lokItemsList.length-1?'1px solid #f1f5f9':'none'}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <p style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
+                    <p style={{fontSize:10,color:'#94a3b8'}}>{item.adet} adet</p>
+                  </div>
+                  <button onClick={()=>setVasItems(prev=>({...prev,[key]:item.adet}))} title="VAS'a gönder"
+                    style={{...S.btn,background:'#f3e8ff',color:'#7c3aed',padding:'5px 9px',fontSize:11,flexShrink:0}}>🏷️ VAS</button>
+                  <input placeholder="Lokasyon" value={mkLokasyonlar[key]||''}
+                    onChange={e=>setMkLokasyonlar(prev=>({...prev,[key]:e.target.value.trim().toUpperCase()}))}
+                    style={{width:100,padding:'5px 8px',border:'1px solid #e2e8f0',borderRadius:7,fontSize:11,fontFamily:'monospace',outline:'none',background:mkLokasyonlar[key]?'#f0fdf4':'#fff',flexShrink:0}}/>
                 </div>
-              ))}
+              );})}
             </div>
           )}
+
           <button onClick={()=>setView('mk_sayim')} style={{...S.btn,width:'100%',background:'#3b82f6',color:'#fff',marginBottom:10}}>➕ Daha Fazla Ürün Say</button>
-          {isAdmin&&<button onClick={malKabulOnayla} disabled={loading||itemList.length===0} style={{...S.btn,width:'100%',background:'#10b981',color:'#fff',opacity:loading?.6:1}}>{loading?'Ekleniyor...':'✅ Onayla ve Stoğa Ekle'}</button>}
+          {isAdmin&&<button onClick={malKabulOnayla} disabled={loading||itemList.length===0} style={{...S.btn,width:'100%',background:'#10b981',color:'#fff',opacity:loading?.6:1}}>{loading?'İşleniyor...':'✅ Tamamla ve Stoğa Al'}</button>}
         </div>
       </div>
     );
@@ -852,6 +899,7 @@ export default function MalKabul() {
                 <div style={{flex:1}}>
                   <p style={{color:'#fff',fontWeight:700,fontSize:13}}>📥 {group.sessionInfo?.sessionAdi||'Mal Kabul'} — {group.sessionInfo?.tarih||'Tarih bilinmiyor'}</p>
                   <p style={{color:'rgba(255,255,255,.7)',fontSize:11}}>{group.sessionInfo?.baslatan||''} · {group.sessionInfo?.mkTur==='referansli'?'Referanslı':'Manuel'} · {group.items.length} ürün</p>
+                  <p style={{color:'rgba(255,255,255,.55)',fontSize:10,fontFamily:'monospace',marginTop:2}}>MK: {sid.slice(0,8)}{group.sessionInfo?.irsaliyeNo?` · İrsaliye: ${group.sessionInfo.irsaliyeNo}`:''}</p>
                 </div>
                 <span style={{background:'rgba(255,255,255,.2)',color:'#fff',borderRadius:20,padding:'3px 10px',fontSize:11,fontWeight:700}}>{group.items.length} kalem</span>
                 {isAdmin&&(
