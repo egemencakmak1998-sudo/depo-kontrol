@@ -366,7 +366,7 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
                   <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 0',borderBottom:i<lokMevcut.length-1?'1px solid #dbeafe':'none'}}>
                     <div style={{flex:1,minWidth:0}}>
                       <p style={{fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.urunAdi||'—'}</p>
-                      <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{p.malzemeKodu}</p>
+                      <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{p.malzemeKodu}{p.malzemeKodu&&p.ean?' · ':''}{p.ean}</p>
                     </div>
                     <span style={{fontSize:13,fontWeight:700,color:p.lokMiktar<=0?'#ef4444':'#1d4ed8',flexShrink:0}}>{p.lokMiktar??'—'} adet</span>
                   </div>
@@ -381,7 +381,7 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
             <div key={ean} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 0',borderBottom:'1px solid #f1f5f9'}}>
               <div style={{flex:1,minWidth:0}}>
                 <p style={{fontSize:13,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.urunAdi||ean}</p>
-                <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{p.malzemeKodu||ean}{hasar>0&&<span style={{color:'#d97706',marginLeft:8}}>⚠️ {hasar} hasarlı</span>}</p>
+                <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{p.malzemeKodu||''}{p.malzemeKodu&&ean?' · ':''}{ean}{hasar>0&&<span style={{color:'#d97706',marginLeft:8}}>⚠️ {hasar} hasarlı</span>}</p>
               </div>
               <div style={{display:'flex',alignItems:'center',gap:5,flexShrink:0}}>
                 <button onClick={()=>setEntries(prev=>({...prev,[ean]:Math.max(0,adet-1)}))}
