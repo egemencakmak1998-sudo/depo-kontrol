@@ -319,7 +319,6 @@ function Urunler() {
             <p style={{fontSize:10,color:p.lokasyonDurumu==='atanmadi'?'#f59e0b':'#64748b',fontFamily:'monospace',marginTop:3}}>📍 {getLocationText(p)}</p>
           </div>
           <button onClick={()=>{setEditingLoc(p);setLocValue(getLocations(p).filter(l=>l!=='BELIRLENECEK').join(', '));setNameValue(p.urunAdi||'');}} style={{fontSize:11,color:'#2563eb',background:'#eff6ff',padding:'4px 8px',borderRadius:6,border:'1px solid #bfdbfe',fontWeight:700,cursor:'pointer',flexShrink:0}}>✏️ Düzenle</button>
-          <span style={{fontSize:11,color:'#64748b',background:'#f1f5f9',padding:'2px 8px',borderRadius:6,flexShrink:0}}>{p.birim||'Adet'}</span>
         </div>
       ))}
       {showManual&&(
