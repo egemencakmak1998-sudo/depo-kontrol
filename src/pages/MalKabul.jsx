@@ -576,8 +576,11 @@ export default function MalKabul() {
           baslangic:Timestamp.now(),mkTur,sessionAdi:sessionAdi.trim()||'Mal Kabul',
           referenceItems:mkTur==='referansli'?mkRef:[],vasTransferItems:{},mkLokasyonlar:{}
         });
-        const s={id:ref.id,tip:'mal_kabul',durum:'aktif',baslatan:profile?.name||user?.email||'',baslangic:Timestamp.now(),mkTur,sessionAdi:sessionAdi.trim()||'Mal Kabul',referenceItems:mkTur==='referansli'?mkRef:[]};
+        const refItems=mkTur==='referansli'?mkRef:[];
+        const s={id:ref.id,tip:'mal_kabul',durum:'aktif',baslatan:profile?.name||user?.email||'',baslangic:Timestamp.now(),mkTur,sessionAdi:sessionAdi.trim()||'Mal Kabul',referenceItems:refItems};
         setActiveSession(s);setSessions(prev=>[s,...prev]);
+        // Referans artık session'a ait — setup draft state'lerini temizle ki sonraki mal kabule taşmasın
+        setMkRef([]);setSessionAdi('');setMkTur('manuel');
       }
       clearSetupDraft();setView('mk_sayim');
     }catch(e){toast$('Hata: '+e.message,'error');}
@@ -944,7 +947,7 @@ export default function MalKabul() {
             </div>
           </div>
         )}
-        <button onClick={()=>{setActiveSession(null);setMkEntries([]);setVasItems({});setMkLokasyonlar({});if(mkRef.length===0)setMkTur('manuel');setView('mal_kabul');}}
+        <button onClick={()=>{const fromSession=!!activeSession;setActiveSession(null);setMkEntries([]);setVasItems({});setMkLokasyonlar({});if(fromSession){setMkRef([]);setMkTur('manuel');setSessionAdi('');clearSetupDraft();}else if(mkRef.length===0)setMkTur('manuel');setView('mal_kabul');}}
           style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',marginBottom:16}}>📥 Yeni Mal Kabul Başlat</button>
 
         {aktifler.length>0&&<>
