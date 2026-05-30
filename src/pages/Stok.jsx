@@ -78,7 +78,7 @@ export default function Stok() {
 
   const TABS = isAdmin
     ? ['Raf Görünümü', 'Ürün Ara', 'Kritik Stok', 'Hareketler', 'Yönet']
-    : ['Raf Görünümü', 'Ürün Ara', 'Kritik Stok'];
+    : ['Raf Görünümü', 'Ürün Ara', 'Kritik Stok', 'Hareketler'];
 
   const [tab, setTab] = useState('Raf Görünümü');
   const [toast, setToast] = useState(null);
@@ -568,7 +568,12 @@ export default function Stok() {
     const prevByLok = manualProd.byLocation || {};
     const prevLokMiktar = prevByLok[lok] || 0;
     if (manualTip==='cikis' && prevLokMiktar < miktar) {
-      if (!window.confirm(`⚠️ ${lok} lokasyonunda yalnızca ${prevLokMiktar} adet var. Yine de ${miktar} adet çıkış yapılsın mı?`)) return;
+      toast$(`⛔ ${lok} lokasyonunda yalnızca ${prevLokMiktar} adet var. Çıkış yapılamaz.`, 'error');
+      return;
+    }
+    if (manualTip==='cikis' && (manualProd.currentMiktar||0) < miktar) {
+      toast$(`⛔ Toplam stok yetersiz (${manualProd.currentMiktar} adet). Çıkış yapılamaz.`, 'error');
+      return;
     }
     setManualLoading(true);
     try {
@@ -610,14 +615,24 @@ export default function Stok() {
     try {
       const now = Timestamp.now();
       const prev = adjustProd.miktar||0;
-      await setDoc(doc(db,'stock',adjustProd.ean), { ean:adjustProd.ean, miktar:yeni, sonGuncelleme:now }, {merge:true});
+      // byLocation içindeki negatif kayıtları temizle
+      const stockSnap = await getDoc(doc(db,'stock',adjustProd.ean));
+      const byLok = stockSnap.exists() ? (stockSnap.data().byLocation||{}) : {};
+      const cleanByLok = Object.fromEntries(
+        Object.entries(byLok).filter(([,m]) => m > 0)
+      );
+      await setDoc(doc(db,'stock',adjustProd.ean), {
+        ean:adjustProd.ean, miktar:yeni,
+        byLocation: cleanByLok,
+        sonGuncelleme:now
+      }, {merge:true});
       await addDoc(collection(db,'stockMovements'), {
         tarih:now, tip:'duzeltme', ean:adjustProd.ean,
         malzemeKodu:adjustProd.malzemeKodu||'', urunAdi:adjustProd.urunAdi||'',
         miktar:yeni-prev, oncekiMiktar:prev, sonrakiMiktar:yeni,
         kaynak:'manuel_duzeltme', yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
       });
-      toast$('Stok güncellendi ✓','success');
+      toast$('Stok düzeltildi — negatif lokasyonlar temizlendi ✓','success');
       setAdjustProd(null);
       if (tab==='Raf Görünümü') loadRaf();
       if (tab==='Kritik Stok') loadKritik();
