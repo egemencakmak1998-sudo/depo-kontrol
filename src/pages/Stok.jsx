@@ -77,25 +77,23 @@ export default function Stok() {
   const isAdmin = profile?.role === 'admin';
 
   const TABS = isAdmin
-    ? ['Raf Görünümü', 'Ürün Ara', 'Kritik Stok', 'Hareketler', 'Yönet']
-    : ['Raf Görünümü', 'Ürün Ara', 'Kritik Stok', 'Hareketler'];
+    ? ['Raf Görünümü', 'Ürün Ara', 'Hareketler', 'Yönet']
+    : ['Raf Görünümü', 'Ürün Ara', 'Hareketler'];
 
   const [tab, setTab] = useState('Raf Görünümü');
   const [toast, setToast] = useState(null);
   const toast$ = (msg, type = 'info') => setToast({ msg, type, id: Date.now() });
 
   /* ── Stats ── */
-  const [stats, setStats] = useState({ cesit: 0, adet: 0, kritik: 0 });
+  const [stats, setStats] = useState({ cesit: 0, adet: 0 });
   const loadStats = useCallback(async () => {
     try {
       const snap = await getDocs(collection(db, 'stock'));
-      let adet = 0, kritik = 0;
+      let adet = 0;
       snap.docs.forEach(d => {
-        const m = d.data().miktar || 0;
-        adet += m;
-        if (m <= 0) kritik++;
+        adet += d.data().miktar || 0;
       });
-      setStats({ cesit: snap.size, adet, kritik });
+      setStats({ cesit: snap.size, adet });
     } catch {}
   }, []);
   useEffect(() => { loadStats(); }, [loadStats]);
@@ -298,40 +296,7 @@ export default function Stok() {
     }, 400);
   }, [searchQ]);
 
-  /* ── KRİTİK STOK ── */
-  const [kritikList, setKritikList] = useState([]);
-  const [kritikLoading, setKritikLoading] = useState(false);
 
-  const loadKritik = useCallback(async () => {
-    setKritikLoading(true);
-    try {
-      const stockSnap = await getDocs(collection(db,'stock'));
-      const prodSnap = await getDocs(collection(db,'products'));
-      const prodMap = {};
-      prodSnap.docs.forEach(d => { const p=d.data(); if(p.ean) prodMap[p.ean]=p; });
-      const kritik = [];
-      stockSnap.docs.forEach(d => {
-        const s = {ean:d.id,...d.data()};
-        const prod = prodMap[s.ean] || {};
-        const base = {
-          ...s,
-          urunAdi: prod.urunAdi || s.urunAdi || '',
-          malzemeKodu: prod.malzemeKodu || s.malzemeKodu || '',
-          locations: prod.locations || [],
-        };
-        if ((s.miktar||0) <= 0) kritik.push({ ...base, kritikTip: 'toplam' });
-        if (s.byLocation) {
-          Object.entries(s.byLocation).forEach(([lok, m]) => {
-            if (m < 0) kritik.push({ ...base, miktar: m, kritikLokasyon: lok, kritikTip: 'lokasyon' });
-          });
-        }
-      });
-      setKritikList(kritik.sort((a,b) => (a.miktar||0)-(b.miktar||0)));
-    } catch {}
-    setKritikLoading(false);
-  }, []);
-
-  useEffect(() => { if (tab==='Kritik Stok') loadKritik(); }, [tab, loadKritik]);
 
   /* ── HAREKETLER ── */
   const [hareketler, setHareketler] = useState([]);
@@ -635,7 +600,6 @@ export default function Stok() {
       toast$('Stok düzeltildi — negatif lokasyonlar temizlendi ✓','success');
       setAdjustProd(null);
       if (tab==='Raf Görünümü') loadRaf();
-      if (tab==='Kritik Stok') loadKritik();
       loadStats();
     } catch(e) { toast$('Hata: '+e.message,'error'); }
   };
@@ -678,10 +642,7 @@ export default function Stok() {
             <p style={{ color:'#94a3b8', fontSize:10 }}>TOPLAM</p>
             <p style={{ color:'#10b981', fontWeight:700, fontSize:15 }}>{stats.adet.toLocaleString()}</p>
           </div>
-          <div style={{ textAlign:'center' }}>
-            <p style={{ color:'#94a3b8', fontSize:10 }}>KRİTİK</p>
-            <p style={{ color: stats.kritik>0?'#ef4444':'#10b981', fontWeight:700, fontSize:15 }}>{stats.kritik}</p>
-          </div>
+
         </div>
       </div>
 
@@ -807,35 +768,6 @@ export default function Stok() {
                   onAdjust={isAdmin ? (p) => { setAdjustProd(p); setAdjustMiktar(String(p.miktar??'')); } : null} />
               ))}
             </div>
-          </div>
-        )}
-
-        {/* ── KRİTİK STOK ── */}
-        {tab==='Kritik Stok' && (
-          <div style={S.card}>
-            <p style={{ fontSize:12, fontWeight:700, color:'#ef4444', marginBottom:12,
-              textTransform:'uppercase', letterSpacing:1 }}>
-              ⚠️ Kritik Stok — {kritikList.length} Ürün
-            </p>
-            {kritikLoading ? (
-              <p style={{ color:'#94a3b8', fontSize:13, textAlign:'center', padding:'20px 0' }}>Yükleniyor...</p>
-            ) : kritikList.length===0 ? (
-              <p style={{ color:'#10b981', fontSize:13, textAlign:'center', padding:'20px 0' }}>✅ Kritik stok yok</p>
-            ) : (
-              kritikList.map((p,i) => (
-                <div key={i}>
-                  {p.kritikTip==='lokasyon' && (
-                    <div style={{ fontSize:11, color:'#f59e0b', fontWeight:600,
-                      padding:'4px 8px', background:'#fffbeb', borderRadius:6,
-                      marginBottom:2, display:'inline-block' }}>
-                      ⚠️ Lokasyon eksisi: 📍{p.kritikLokasyon}
-                    </div>
-                  )}
-                  <ProductRow p={p} isAdmin={isAdmin}
-                    onAdjust={isAdmin ? (p) => { setAdjustProd(p); setAdjustMiktar(String(p.miktar??'')); } : null} />
-                </div>
-              ))
-            )}
           </div>
         )}
 
