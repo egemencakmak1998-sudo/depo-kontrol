@@ -328,8 +328,8 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
         eksikOzet:itemsToSave.filter(i=>i.eksikKabul).map(i=>({ean:i.ean,malzemeKodu:i.malzemeKodu,urunAdi:i.urunAdi,sayilan:i.adet,beklenen:i.beklenenAdet})),
         hasarliOzet:itemsToSave.filter(i=>i.hasarliAdet>0).map(i=>({ean:i.ean,adet:i.hasarliAdet,urunAdi:i.urunAdi})),
       });
-      // Draft temizle
-      await updateDoc(doc(db,'countSessions',sessionId),{lastEntryId:ref.id,draftCounts:{},draftSavedAt:Date.now()});
+      // Draft temizle + lokasyon aşamasına geç
+      await updateDoc(doc(db,'countSessions',sessionId),{lastEntryId:ref.id,draftCounts:{},draftSavedAt:Date.now(),mkFaz:'lokasyon'});
       clearMkDraft(sessionId);
       onDone(ref.id, itemsToSave, [...vasSet]);
     }catch(e){toast$('Hata: '+e.message,'error');}
@@ -630,6 +630,8 @@ export default function MalKabul() {
     const snap=await getDocs(query(collection(db,'countEntries'),where('sessionId','==',s.id)));
     const entries=snap.docs.map(d=>({id:d.id,...d.data()}));
     setMkEntries(entries.map(e=>({id:e.id,items:e.items||[]})));
+    // Lokasyon aşamasındaysa doğrudan lokasyon atama (mk_ozet) ekranına git — tarama/tekrar VAS atla
+    if(s.mkFaz==='lokasyon'){ setView('mk_ozet'); return; }
     // Eğer entry yoksa veya draft varsa → sayım ekranına git
     const hasDraft=lsDraft&&Object.keys(lsDraft.counts||{}).length>0;
     setView(entries.length>0&&!hasDraft?'mk_ozet':'mk_sayim');
@@ -658,6 +660,7 @@ export default function MalKabul() {
         if(vasUrunler.length>0)toast$(`${vasUrunler.length} ürün VAS listesine aktarıldı 🏷️`,'success');
       }catch(e){toast$('VAS yazma hatası: '+e.message,'error');}
     }
+    setActiveSession(prev=>prev?{...prev,mkFaz:'lokasyon'}:prev);
     setView('mk_ozet');
   };
 
@@ -674,6 +677,25 @@ export default function MalKabul() {
     setLoading(true);
     try{
       const now=Timestamp.now();
+      // GÜVENLİK AĞI: Eski oturumlarda (mkFaz yok) VAS ürünleri tarama anında yazılmamış olabilir.
+      // Bu oturumlarda VAS map'inde olup koleksiyonda olmayan ürünleri burada yaz.
+      if(!activeSession.mkFaz){
+        const existingVas=await getDocs(query(collection(db,'vasItems'),where('sessionId','==',activeSession.id)));
+        const yazilmisEanlar=new Set(existingVas.docs.map(d=>d.data().ean));
+        for(const item of itemList){
+          if(item.eksikKabul)continue;
+          const vasAdet=vasItems[item.ean||item.malzemeKodu]||0;
+          if(vasAdet>0&&item.ean&&!yazilmisEanlar.has(item.ean)){
+            await addDoc(collection(db,'vasItems'),{
+              ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',adet:vasAdet,
+              sessionId:activeSession.id,durum:'etiketleme_bekliyor',tarih:now,
+              mkSessionAdi:activeSession.sessionAdi||'Mal Kabul',mkTarih:now,
+              mkIrsaliyeNo:activeSession.irsaliyeNo||'',
+              mkBaslatan:activeSession.baslatan||profile?.name||user?.email||'',
+            });
+          }
+        }
+      }
       const stockSnap=await getDocs(collection(db,'stock'));
       const stockMap={};stockSnap.docs.forEach(d=>{stockMap[d.id]=d.data();});
       const batch=writeBatch(db);const movBatch=writeBatch(db);
@@ -916,7 +938,6 @@ export default function MalKabul() {
             </div>
           )}
 
-          <button onClick={()=>setView('mk_sayim')} style={{...S.btn,width:'100%',background:'#3b82f6',color:'#fff',marginBottom:10}}>➕ Daha Fazla Ürün Say</button>
           {isAdmin&&<button onClick={malKabulOnayla} disabled={loading||itemList.length===0} style={{...S.btn,width:'100%',background:'#10b981',color:'#fff',opacity:loading?.6:1}}>{loading?'İşleniyor...':'✅ Tamamla ve Stoğa Al'}</button>}
         </div>
 
