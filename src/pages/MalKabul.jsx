@@ -14,6 +14,11 @@ const SETUP_KEY = 'depoKontrol:malKabul:setup';
 const readSetupDraft  = () => { try { const r=localStorage.getItem(SETUP_KEY); return r?JSON.parse(r):null; } catch { return null; } };
 const writeSetupDraft = data => { try { localStorage.setItem(SETUP_KEY,JSON.stringify(data)); } catch {} };
 const clearSetupDraft = () => { try { localStorage.removeItem(SETUP_KEY); } catch {} };
+/* Lokasyon atama (mk_ozet) draft — vasItems + mkLokasyonlar */
+const LOK_KEY = id => `depoKontrol:malKabul:lok:${id}`;
+const readLokDraft  = id => { try { const r=localStorage.getItem(LOK_KEY(id)); return r?JSON.parse(r):null; } catch { return null; } };
+const writeLokDraft = (id,data) => { try { localStorage.setItem(LOK_KEY(id),JSON.stringify(data)); } catch {} };
+const clearLokDraft = id => { try { localStorage.removeItem(LOK_KEY(id)); } catch {} };
 
 function Toast({ msg, type, onDone }) {
   const bg={success:'#10b981',error:'#ef4444',warning:'#f59e0b',info:'#3b82f6'};
@@ -521,6 +526,19 @@ export default function MalKabul() {
     else if(mkTur!=='manuel') writeSetupDraft({mkTur,mkRef:[],sessionAdi});
   },[mkRef,mkTur,sessionAdi]);
 
+  /* Lokasyon atama draft — anlık localStorage + Firestore kaydı */
+  const persistLok=useCallback((sid,vas,loks)=>{
+    if(!sid)return;
+    writeLokDraft(sid,{vasItems:vas,mkLokasyonlar:loks,savedAt:Date.now()});
+    // Firestore'a da yaz (sayfa/cihaz değişse de kalsın)
+    updateDoc(doc(db,'countSessions',sid),{vasTransferItems:vas,mkLokasyonlar:loks,lokSavedAt:Date.now()}).catch(()=>{});
+  },[]);
+
+  // vasItems/mkLokasyonlar değişince aktif session'a anlık yaz
+  useEffect(()=>{
+    if(activeSession&&view==='mk_ozet') persistLok(activeSession.id,vasItems,mkLokasyonlar);
+  },[vasItems,mkLokasyonlar,activeSession,view,persistLok]);
+
   const deleteSession=async(session)=>{
     const label=session.sessionAdi||(session.mkTur==='referansli'?'Referanslı':'Manuel')+' Mal Kabul';
     if(!window.confirm(`"${label}" oturumu silinecek.\n\nSayım verileri (countEntries) korunacak.\n\nEmin misiniz?`)) return;
@@ -592,8 +610,10 @@ export default function MalKabul() {
     setActiveSession(s);
     setMkTur(s.mkTur||'manuel');
     setMkRef(s.referenceItems||[]);
-    setVasItems(s.vasTransferItems||{});
-    setMkLokasyonlar(s.mkLokasyonlar||{});
+    // Lokasyon atama draft'ı: önce localStorage, sonra Firestore
+    const lokDraft=readLokDraft(s.id);
+    setVasItems(lokDraft?.vasItems||s.vasTransferItems||{});
+    setMkLokasyonlar(lokDraft?.mkLokasyonlar||s.mkLokasyonlar||{});
     // localStorage draft varsa kullan, yoksa Firestore draft
     const lsDraft=readMkDraft(s.id);
     if(!lsDraft&&s.draftCounts&&Object.keys(s.draftCounts).length>0){
@@ -626,8 +646,11 @@ export default function MalKabul() {
     const allItems={};
     mkEntries.forEach(e=>{(e.items||[]).forEach(item=>{const key=item.malzemeKodu||item.ean;if(!allItems[key])allItems[key]={...item,adet:0,hasarliAdet:0,eksikKabul:false};allItems[key].adet+=item.adet;allItems[key].hasarliAdet+=(item.hasarliAdet||0);if(item.eksikKabul)allItems[key].eksikKabul=true;});});
     const itemList=Object.values(allItems);
-    const missing=itemList.find(i=>!mkLokasyonlar[i.ean||i.malzemeKodu]&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet&&!i.eksikKabul);
-    if(missing){toast$(`${missing.urunAdi||missing.malzemeKodu} için lokasyon girin`,'error');return;}
+    // Lokasyona gidecek ama lokasyonu atanmamış ürünler → HVZ havuzuna düşecek
+    const hvzAdaylari=itemList.filter(i=>!i.eksikKabul&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet&&!(mkLokasyonlar[i.ean]||mkLokasyonlar[i.malzemeKodu]));
+    if(hvzAdaylari.length>0){
+      if(!window.confirm(`${hvzAdaylari.length} ürünün lokasyonu atanmadı.\n\nBu ürünler HVZ (havuz) lokasyonuna alınacak ve sonradan Stok → Raf Görünümü'nden gerçek lokasyona taşınabilecek.\n\nDevam edilsin mi?`))return;
+    }
     setLoading(true);
     try{
       const now=Timestamp.now();
@@ -650,21 +673,21 @@ export default function MalKabul() {
           mkBaslatan:activeSession.baslatan||profile?.name||user?.email||'',
         });
 
-        // Lokasyona giden kısım: stoğa eklenir
+        // Lokasyona giden kısım: stoğa eklenir (lokasyon yoksa HVZ)
         if(lokAdet<=0)return; // tamamı VAS'a gidiyorsa stoğa yazma
         const prev=(stockMap[item.ean]?.miktar)||0;
         const next=prev+lokAdet;
-        const lok=mkLokasyonlar[item.ean]||mkLokasyonlar[item.malzemeKodu]||'';
+        const lok=mkLokasyonlar[item.ean]||mkLokasyonlar[item.malzemeKodu]||'HVZ';
         const prevByLok=stockMap[item.ean]?.byLocation||{};
-        const newByLok=lok&&lokAdet>0?{...prevByLok,[lok]:(prevByLok[lok]||0)+lokAdet}:prevByLok;
+        const newByLok={...prevByLok,[lok]:(prevByLok[lok]||0)+lokAdet};
         batch.set(doc(db,'stock',item.ean),{ean:item.ean,miktar:next,urunAdi:item.urunAdi||'',malzemeKodu:item.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
-        movBatch.set(doc(collection(db,'stockMovements')),{tarih:now,tip:'mal_kabul',ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',miktar:lokAdet,oncekiMiktar:prev,sonrakiMiktar:next,hasarliAdet:item.hasarliAdet||0,vasAdet,lokAdet,kaynak:`mal_kabul:${activeSession.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
+        movBatch.set(doc(collection(db,'stockMovements')),{tarih:now,tip:'mal_kabul',ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',miktar:lokAdet,oncekiMiktar:prev,sonrakiMiktar:next,hasarliAdet:item.hasarliAdet||0,vasAdet,lokAdet,lokasyon:lok,kaynak:`mal_kabul:${activeSession.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
       });
       await batch.commit();await movBatch.commit();
       for(const vi of vasItemsToSave)await addDoc(collection(db,'vasItems'),vi);
       await updateDoc(doc(db,'countSessions',activeSession.id),{durum:'tamamlandi',bitis:now});
-      clearMkDraft(activeSession.id);clearSetupDraft();
-      toast$('Mal kabul stoğa eklendi ✓','success');
+      clearMkDraft(activeSession.id);clearSetupDraft();clearLokDraft(activeSession.id);
+      toast$(hvzAdaylari.length>0?`Tamamlandı ✓ (${hvzAdaylari.length} ürün HVZ havuzuna alındı)`:'Mal kabul stoğa eklendi ✓','success');
       setView('list');setActiveSession(null);setMkEntries([]);setVasItems({});setMkLokasyonlar({});setMkRef([]);setSessionAdi('');
       loadSessions();
     }catch(e){toast$('Hata: '+e.message,'error');}
@@ -855,22 +878,30 @@ export default function MalKabul() {
               <p style={{fontSize:11,color:'#64748b',marginBottom:10}}>İstersen ürünü 🏷️ ile VAS listesine de gönderebilirsin</p>
               <div style={{background:'#eff6ff',borderRadius:8,padding:'8px 10px',marginBottom:10}}>
                 <p style={{fontSize:11,fontWeight:600,color:'#1d4ed8',marginBottom:5}}>Tümüne aynı lokasyon:</p>
-                <input placeholder="A109S013B" style={{width:'100%',padding:'7px 10px',border:'1px solid #bfdbfe',borderRadius:7,fontSize:13,fontFamily:'monospace',outline:'none',boxSizing:'border-box'}}
-                  onChange={e=>{const lok=e.target.value.trim().toUpperCase();if(!lok)return;const n={...mkLokasyonlar};lokItemsList.forEach(i=>{n[i.ean||i.malzemeKodu]=lok;});setMkLokasyonlar(n);}}/>
+                <div style={{display:'flex',gap:6}}>
+                  <input placeholder="A109S013B" style={{flex:1,padding:'7px 10px',border:'1px solid #bfdbfe',borderRadius:7,fontSize:13,fontFamily:'monospace',outline:'none',boxSizing:'border-box'}}
+                    onChange={e=>{const lok=e.target.value.trim().toUpperCase();if(!lok)return;const n={...mkLokasyonlar};lokItemsList.forEach(i=>{n[i.ean||i.malzemeKodu]=lok;});setMkLokasyonlar(n);}}/>
+                  <button onClick={()=>{const n={...mkLokasyonlar};lokItemsList.forEach(i=>{n[i.ean||i.malzemeKodu]='HVZ';});setMkLokasyonlar(n);}}
+                    style={{background:'#fff7ed',border:'1px solid #fed7aa',borderRadius:7,color:'#c2410c',padding:'7px 12px',fontSize:12,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'}}>📦 HVZ</button>
+                </div>
               </div>
               {lokItemsList.map((item,i)=>{
                 const key=item.ean||item.malzemeKodu;
+                const atandi=!!mkLokasyonlar[key];
                 return(
-                <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 0',borderBottom:i<lokItemsList.length-1?'1px solid #f1f5f9':'none'}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <p style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
-                    <p style={{fontSize:10,color:'#94a3b8'}}>{item.adet} adet</p>
+                <div key={i} style={{padding:'8px 0',borderBottom:i<lokItemsList.length-1?'1px solid #f1f5f9':'none'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <p style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
+                      <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{item.malzemeKodu||''}{item.malzemeKodu&&item.ean?' · ':''}{item.ean} · {item.adet} adet</p>
+                    </div>
+                    <button onClick={()=>setVasItems(prev=>({...prev,[key]:item.adet}))} title="VAS'a gönder"
+                      style={{...S.btn,background:'#f3e8ff',color:'#7c3aed',padding:'5px 9px',fontSize:11,flexShrink:0}}>🏷️ VAS</button>
+                    <input placeholder="Lokasyon" value={mkLokasyonlar[key]||''}
+                      onChange={e=>setMkLokasyonlar(prev=>({...prev,[key]:e.target.value.trim().toUpperCase()}))}
+                      style={{width:100,padding:'5px 8px',border:'1px solid #e2e8f0',borderRadius:7,fontSize:11,fontFamily:'monospace',outline:'none',background:atandi?'#f0fdf4':'#fff',flexShrink:0}}/>
                   </div>
-                  <button onClick={()=>setVasItems(prev=>({...prev,[key]:item.adet}))} title="VAS'a gönder"
-                    style={{...S.btn,background:'#f3e8ff',color:'#7c3aed',padding:'5px 9px',fontSize:11,flexShrink:0}}>🏷️ VAS</button>
-                  <input placeholder="Lokasyon" value={mkLokasyonlar[key]||''}
-                    onChange={e=>setMkLokasyonlar(prev=>({...prev,[key]:e.target.value.trim().toUpperCase()}))}
-                    style={{width:100,padding:'5px 8px',border:'1px solid #e2e8f0',borderRadius:7,fontSize:11,fontFamily:'monospace',outline:'none',background:mkLokasyonlar[key]?'#f0fdf4':'#fff',flexShrink:0}}/>
+                  {atandi&&<p style={{fontSize:10,color:'#15803d',fontWeight:600,marginTop:3,marginLeft:2}}>✅ {mkLokasyonlar[key]} lokasyonuna atandı</p>}
                 </div>
               );})}
             </div>
