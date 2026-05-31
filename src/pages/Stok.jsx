@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { collection, getDocs, doc, getDoc, setDoc, addDoc, deleteDoc,
+import { collection, getDocs, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc,
          query, where, orderBy, limit, writeBatch, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
@@ -150,8 +150,66 @@ export default function Stok() {
   const [kat, setKat] = useState(null);
   const [rafProds, setRafProds] = useState([]);
   const [rafLoading, setRafLoading] = useState(false);
+  const [hvzMode, setHvzMode] = useState(false);
+  const [hvzProds, setHvzProds] = useState([]);
+  const [hvzLoading, setHvzLoading] = useState(false);
+  const [hvzTransfer, setHvzTransfer] = useState(null); // {ean,urunAdi,malzemeKodu,miktar}
+  const [hvzTargetLok, setHvzTargetLok] = useState('');
+  const [hvzTransferAdet, setHvzTransferAdet] = useState('');
 
   const rafKod = raf && kat ? `A${koridor}S${String(raf).padStart(3,'0')}${kat}` : null;
+
+  const loadHvz = useCallback(async () => {
+    setHvzLoading(true);
+    try {
+      const snap = await getDocs(collection(db,'stock'));
+      const items = snap.docs
+        .map(d => ({ ean:d.id, ...d.data() }))
+        .filter(s => (s.byLocation?.HVZ ?? 0) > 0)
+        .map(s => ({ ean:s.ean, urunAdi:s.urunAdi||'', malzemeKodu:s.malzemeKodu||'', miktar:s.byLocation.HVZ, totalMiktar:s.miktar||0 }));
+      setHvzProds(items.sort((a,b) => (a.urunAdi||'').localeCompare(b.urunAdi||'')));
+    } catch (e) { toast$('Hata: '+e.message,'error'); }
+    setHvzLoading(false);
+  }, []);
+
+  /* HVZ → gerçek lokasyona taşı */
+  const hvzLokasyonaTasi = async () => {
+    if (!hvzTransfer) return;
+    const hedef = hvzTargetLok.trim().toUpperCase();
+    const adet = parseInt(hvzTransferAdet) || 0;
+    if (!hedef) { toast$('Hedef lokasyon girin', 'error'); return; }
+    if (hedef === 'HVZ') { toast$('Hedef HVZ olamaz', 'error'); return; }
+    if (adet <= 0 || adet > hvzTransfer.miktar) { toast$(`Geçerli adet girin (1-${hvzTransfer.miktar})`, 'error'); return; }
+    try {
+      const now = Timestamp.now();
+      const sRef = doc(db,'stock',hvzTransfer.ean);
+      const sSnap = await getDoc(sRef);
+      const data = sSnap.exists() ? sSnap.data() : { byLocation:{}, miktar:0 };
+      const byLok = { ...(data.byLocation||{}) };
+      byLok.HVZ = (byLok.HVZ||0) - adet;
+      if (byLok.HVZ <= 0) delete byLok.HVZ;
+      byLok[hedef] = (byLok[hedef]||0) + adet;
+      await setDoc(sRef, { byLocation: byLok, sonGuncelleme: now }, { merge:true });
+      // products.locations'a hedefi ekle (yeni lokasyonsa görünür olsun)
+      try {
+        const pSnap = await getDocs(query(collection(db,'products'), where('ean','==',hvzTransfer.ean)));
+        if (!pSnap.empty) {
+          const pdoc = pSnap.docs[0];
+          const locs = pdoc.data().locations || [];
+          if (!locs.includes(hedef)) await updateDoc(doc(db,'products',pdoc.id), { locations:[...locs.filter(l=>l!=='BELIRLENECEK'), hedef] });
+        }
+      } catch {}
+      await addDoc(collection(db,'stockMovements'), {
+        tarih:now, tip:'hvz_transfer', ean:hvzTransfer.ean,
+        malzemeKodu:hvzTransfer.malzemeKodu||'', urunAdi:hvzTransfer.urunAdi||'',
+        miktar:adet, lokasyon:hedef, kaynakLokasyon:'HVZ',
+        kaynak:'hvz_transfer', yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
+      });
+      toast$(`${adet} adet ${hedef} lokasyonuna taşındı ✓`, 'success');
+      setHvzTransfer(null); setHvzTargetLok(''); setHvzTransferAdet('');
+      loadHvz();
+    } catch (e) { toast$('Hata: '+e.message, 'error'); }
+  };
 
   const loadRaf = useCallback(async () => {
     if (!rafKod) return;
@@ -662,6 +720,49 @@ export default function Stok() {
         {/* ── RAF GÖRÜNÜMÜ ── */}
         {tab==='Raf Görünümü' && (
           <>
+            {/* HVZ Havuz toggle */}
+            <button onClick={() => { const n=!hvzMode; setHvzMode(n); if(n){setRaf(null);setKat(null);loadHvz();} }}
+              style={{ ...S.btn, width:'100%', marginBottom:12, fontSize:14,
+                background: hvzMode?'#c2410c':'#fff7ed', color: hvzMode?'#fff':'#c2410c',
+                border: hvzMode?'none':'1px solid #fed7aa' }}>
+              📦 HVZ Havuz {hvzMode?'(Açık)':''}
+            </button>
+
+            {hvzMode ? (
+              <div style={S.card}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+                  <p style={{ fontSize:12, fontWeight:700, color:'#c2410c', textTransform:'uppercase', letterSpacing:1 }}>📦 Havuzdaki Ürünler</p>
+                  <button onClick={loadHvz} style={{ background:'#f1f5f9', border:'none', borderRadius:7, padding:'5px 10px', fontSize:12, cursor:'pointer' }}>↻</button>
+                </div>
+                {hvzLoading ? (
+                  <p style={{ color:'#94a3b8', fontSize:13, padding:'20px 0', textAlign:'center' }}>Yükleniyor...</p>
+                ) : hvzProds.length === 0 ? (
+                  <p style={{ color:'#94a3b8', fontSize:13, padding:'20px 0', textAlign:'center' }}>Havuzda bekleyen ürün yok</p>
+                ) : (
+                  <>
+                    <p style={{ fontSize:12, color:'#94a3b8', marginBottom:8 }}>{hvzProds.length} ürün havuzda bekliyor</p>
+                    {hvzProds.map((p,i) => (
+                      <div key={i} style={{ padding:'9px 0', borderBottom:i<hvzProds.length-1?'1px solid #f1f5f9':'none' }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <p style={{ fontSize:13, fontWeight:600, color:'#1e293b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.urunAdi||'—'}</p>
+                            <p style={{ fontSize:10, color:'#94a3b8', fontFamily:'monospace' }}>{p.malzemeKodu}{p.malzemeKodu&&p.ean?' · ':''}{p.ean}</p>
+                          </div>
+                          <span style={{ fontSize:13, fontWeight:800, color:'#c2410c', flexShrink:0 }}>{p.miktar} adet</span>
+                          {isAdmin && (
+                            <button onClick={() => { setHvzTransfer(p); setHvzTargetLok(''); setHvzTransferAdet(String(p.miktar)); }}
+                              style={{ background:'#1e40af', border:'none', borderRadius:8, color:'#fff', padding:'6px 11px', fontSize:11, fontWeight:700, cursor:'pointer', flexShrink:0 }}>
+                              → Lokasyona Taşı
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            ) : (
+            <>
             <div style={S.card}>
               <p style={{ fontSize:12, fontWeight:700, color:'#64748b', marginBottom:10,
                 textTransform:'uppercase', letterSpacing:1 }}>Koridor</p>
@@ -728,6 +829,8 @@ export default function Stok() {
                   </>
                 )}
               </div>
+            )}
+            </>
             )}
           </>
         )}
@@ -1034,6 +1137,32 @@ export default function Stok() {
                 style={{ ...S.btn, flex:1, background:'#f1f5f9', color:'#64748b' }}>İptal</button>
               <button onClick={saveAdjust}
                 style={{ ...S.btn, flex:1, background:'#1e40af', color:'#fff' }}>Kaydet</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {hvzTransfer && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.5)',
+          display:'flex', alignItems:'center', justifyContent:'center', zIndex:500 }}>
+          <div style={{ background:'#fff', borderRadius:16, padding:24,
+            width:'calc(100% - 48px)', maxWidth:380 }}>
+            <p style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>📦 HVZ → Lokasyona Taşı</p>
+            <p style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>{hvzTransfer.urunAdi||hvzTransfer.ean}</p>
+            <p style={{ fontSize:11, color:'#94a3b8', fontFamily:'monospace', marginBottom:16 }}>Havuzda: {hvzTransfer.miktar} adet</p>
+            <p style={{ fontSize:11, fontWeight:600, color:'#475569', marginBottom:5 }}>Taşınacak adet</p>
+            <input type="number" style={{ ...S.input, marginBottom:12 }}
+              placeholder={`Max ${hvzTransfer.miktar}`} value={hvzTransferAdet}
+              onChange={e => setHvzTransferAdet(e.target.value)} />
+            <p style={{ fontSize:11, fontWeight:600, color:'#475569', marginBottom:5 }}>Hedef lokasyon</p>
+            <input style={{ ...S.input, marginBottom:16, fontFamily:'monospace' }}
+              placeholder="A109S013B" value={hvzTargetLok}
+              onChange={e => setHvzTargetLok(e.target.value.toUpperCase())} autoFocus />
+            <div style={{ display:'flex', gap:10 }}>
+              <button onClick={() => setHvzTransfer(null)}
+                style={{ ...S.btn, flex:1, background:'#f1f5f9', color:'#64748b' }}>İptal</button>
+              <button onClick={hvzLokasyonaTasi}
+                style={{ ...S.btn, flex:1, background:'#1e40af', color:'#fff' }}>Taşı →</button>
             </div>
           </div>
         </div>
