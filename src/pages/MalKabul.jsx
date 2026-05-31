@@ -47,6 +47,7 @@ function LokPicker({onSelect}){
       <button onClick={()=>camOn?stopCam():startCam()} style={{background:camOn?'#ef4444':'#1e40af',border:'none',borderRadius:10,color:'#fff',padding:'9px 14px',fontSize:13,fontWeight:600,cursor:'pointer'}}>{camOn?'⏹':'📷 Tara'}</button>
     </div>
     {camOn&&<div style={{marginBottom:10,borderRadius:10,overflow:'hidden',background:'#000',maxHeight:160}}><video ref={videoRef} style={{width:'100%',maxHeight:160,objectFit:'cover'}} playsInline muted/></div>}
+    <button onClick={()=>onSelect('HVZ')} style={{width:'100%',background:'#fff7ed',border:'1px solid #fed7aa',borderRadius:10,padding:'9px 0',fontSize:13,fontWeight:700,cursor:'pointer',color:'#c2410c',marginBottom:12}}>📦 HVZ — Havuz (Lokasyonsuz)</button>
     <p style={{fontSize:11,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>Koridor</p>
     <div style={{display:'flex',gap:8,marginBottom:12}}>{['109','110'].map(k=><button key={k} onClick={()=>{setKor(k);setRaf(null);setKat(null);}} style={{flex:1,border:'none',borderRadius:10,padding:'9px 0',fontSize:14,fontWeight:600,cursor:'pointer',background:kor===k?'#1e40af':'#f1f5f9',color:kor===k?'#fff':'#475569'}}>{k}</button>)}</div>
     <p style={{fontSize:11,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>Raf {raf?`— ${raf}`:''}</p>
@@ -500,6 +501,7 @@ export default function MalKabul() {
   const [vasItems,     setVasItems]     = useState({});
   const [mkLokasyonlar,setMkLokasyonlar]= useState({});
   const [vasList,      setVasList]      = useState([]);
+  const [lokPickerFor, setLokPickerFor] = useState(null); // mk_ozet'te lokasyon seçici açık olan ürün key'i
   const toast$ = (msg,type='info') => setToast({msg,type,id:Date.now()});
 
   useEffect(()=>{
@@ -633,10 +635,28 @@ export default function MalKabul() {
     setView(entries.length>0&&!hasDraft?'mk_ozet':'mk_sayim');
   };
 
-  const handleSayimDone=(entryId,items,vasKeys=[])=>{
+  const handleSayimDone=async(entryId,items,vasKeys=[])=>{
     setMkEntries(prev=>[...prev,{id:entryId,items}]);
-    if(vasKeys.length>0){
-      setVasItems(prev=>{const next={...prev};items.forEach(item=>{const key=item.ean||item.malzemeKodu;if(vasKeys.includes(key))next[key]=(next[key]||0)+item.adet;});return next;});
+    // VAS işaretli ürünleri ANINDA vasItems koleksiyonuna yaz
+    if(vasKeys.length>0&&activeSession){
+      const now=Timestamp.now();
+      const vasUrunler=items.filter(item=>vasKeys.includes(item.ean||item.malzemeKodu)&&!item.eksikKabul&&item.adet>0);
+      try{
+        for(const item of vasUrunler){
+          await addDoc(collection(db,'vasItems'),{
+            ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',adet:item.adet,
+            sessionId:activeSession.id,durum:'etiketleme_bekliyor',tarih:now,
+            mkSessionAdi:activeSession.sessionAdi||'Mal Kabul',
+            mkTarih:now,
+            mkIrsaliyeNo:activeSession.irsaliyeNo||'',
+            mkBaslatan:activeSession.baslatan||profile?.name||user?.email||'',
+            entryId,
+          });
+        }
+        // VAS ürünlerini map'te işaretle (lokasyon atama sayfasında salt-görünür olsun, stoğa yazılmasın)
+        setVasItems(prev=>{const next={...prev};vasUrunler.forEach(item=>{const key=item.ean||item.malzemeKodu;next[key]=(next[key]||0)+item.adet;});return next;});
+        if(vasUrunler.length>0)toast$(`${vasUrunler.length} ürün VAS listesine aktarıldı 🏷️`,'success');
+      }catch(e){toast$('VAS yazma hatası: '+e.message,'error');}
     }
     setView('mk_ozet');
   };
@@ -656,23 +676,14 @@ export default function MalKabul() {
       const now=Timestamp.now();
       const stockSnap=await getDocs(collection(db,'stock'));
       const stockMap={};stockSnap.docs.forEach(d=>{stockMap[d.id]=d.data();});
-      const batch=writeBatch(db);const movBatch=writeBatch(db);const vasItemsToSave=[];
+      const batch=writeBatch(db);const movBatch=writeBatch(db);
       itemList.forEach(item=>{
         if(!item.ean)return;
         if(item.eksikKabul)return; // eksik stoğa girmez
         const vasAdet=vasItems[item.ean||item.malzemeKodu]||0;
         const lokAdet=item.adet-vasAdet;
 
-        // VAS'a giden kısım: stoğa GİRMEZ, VAS listesine eklenir
-        if(vasAdet>0)vasItemsToSave.push({
-          ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',adet:vasAdet,
-          sessionId:activeSession.id,durum:'etiketleme_bekliyor',tarih:now,
-          mkSessionAdi:activeSession.sessionAdi||'Mal Kabul',
-          mkTarih:now,
-          mkIrsaliyeNo:activeSession.irsaliyeNo||'',
-          mkBaslatan:activeSession.baslatan||profile?.name||user?.email||'',
-        });
-
+        // VAS'a giden kısım zaten tarama "Tamamla" anında vasItems koleksiyonuna yazıldı — burada tekrar yazma, stoğa da girme
         // Lokasyona giden kısım: stoğa eklenir (lokasyon yoksa HVZ)
         if(lokAdet<=0)return; // tamamı VAS'a gidiyorsa stoğa yazma
         const prev=(stockMap[item.ean]?.miktar)||0;
@@ -684,7 +695,6 @@ export default function MalKabul() {
         movBatch.set(doc(collection(db,'stockMovements')),{tarih:now,tip:'mal_kabul',ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',miktar:lokAdet,oncekiMiktar:prev,sonrakiMiktar:next,hasarliAdet:item.hasarliAdet||0,vasAdet,lokAdet,lokasyon:lok,kaynak:`mal_kabul:${activeSession.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
       });
       await batch.commit();await movBatch.commit();
-      for(const vi of vasItemsToSave)await addDoc(collection(db,'vasItems'),vi);
       await updateDoc(doc(db,'countSessions',activeSession.id),{durum:'tamamlandi',bitis:now});
       clearMkDraft(activeSession.id);clearSetupDraft();clearLokDraft(activeSession.id);
       toast$(hvzAdaylari.length>0?`Tamamlandı ✓ (${hvzAdaylari.length} ürün HVZ havuzuna alındı)`:'Mal kabul stoğa eklendi ✓','success');
@@ -833,7 +843,7 @@ export default function MalKabul() {
           <div style={{...S.card,background:'#f0fdf4',border:'1px solid #bbf7d0'}}>
             <p style={{fontSize:13,fontWeight:700,color:'#15803d'}}>📊 Özet</p>
             <p style={{fontSize:12,color:'#166534',marginTop:4}}>📍 {lokItemsList.length} kalem · {toplam.toLocaleString()} adet → stoğa girecek</p>
-            {vasItemsList.length>0&&<p style={{fontSize:12,color:'#7c3aed',marginTop:2,fontWeight:600}}>🏷️ {vasItemsList.length} kalem · {vasToplam.toLocaleString()} adet → VAS listesine gidecek (stoğa girmez)</p>}
+            {vasItemsList.length>0&&<p style={{fontSize:12,color:'#7c3aed',marginTop:2,fontWeight:600}}>🏷️ {vasItemsList.length} kalem · {vasToplam.toLocaleString()} adet → VAS listesine aktarıldı (stoğa girmez)</p>}
             {eksikItems.length>0&&<p style={{fontSize:12,color:'#dc2626',marginTop:2,fontWeight:600}}>🔒 {eksikItems.length} kalem eksik kabul — stoğa girmeyecek</p>}
             {toplamHasar>0&&<p style={{fontSize:12,color:'#d97706',marginTop:2}}>⚠️ {toplamHasar} hasarlı adet</p>}
             {tamEslesen&&<p style={{fontSize:12,color:'#10b981',marginTop:4,fontWeight:600}}>✅ Referans ile tam eşleşme</p>}
@@ -852,11 +862,11 @@ export default function MalKabul() {
             </div>
           )}
 
-          {/* VAS'a gidecek ürünler — salt görünür, lokasyon atanmaz */}
+          {/* VAS'a aktarılan ürünler — salt görünür (zaten VAS listesine yazıldı) */}
           {vasItemsList.length>0&&(
             <div style={{...S.card,border:'1px solid #ddd6fe',background:'#faf5ff'}}>
-              <p style={{fontSize:13,fontWeight:700,color:'#7c3aed',marginBottom:4}}>🏷️ VAS Listesine Gidecek</p>
-              <p style={{fontSize:11,color:'#7c3aed',marginBottom:10,opacity:.8}}>Bu ürünler stoğa alınmaz. Tamamlandığında VAS listesine düşer, lokasyon atama orada yapılır.</p>
+              <p style={{fontSize:13,fontWeight:700,color:'#7c3aed',marginBottom:4}}>🏷️ VAS Listesine Aktarıldı</p>
+              <p style={{fontSize:11,color:'#7c3aed',marginBottom:10,opacity:.8}}>Bu ürünler VAS listesine gönderildi ve stoğa alınmayacak. Lokasyon atama VAS listesi bölümünde yapılır.</p>
               {vasItemsList.map((item,i)=>{
                 const key=item.ean||item.malzemeKodu;
                 return(<div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:i<vasItemsList.length-1?'1px solid #ede9fe':'none'}}>
@@ -864,8 +874,7 @@ export default function MalKabul() {
                     <p style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
                     <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{item.malzemeKodu||''}{item.malzemeKodu&&item.ean?' · ':''}{item.ean} · {vasItems[key]} adet</p>
                   </div>
-                  <button onClick={()=>setVasItems(prev=>({...prev,[key]:0}))} title="VAS'tan çıkar, lokasyona al"
-                    style={{...S.btn,background:'#f1f5f9',color:'#475569',padding:'6px 10px',fontSize:11}}>↩ Lokasyona Al</button>
+                  <span style={{background:'#ede9fe',color:'#7c3aed',borderRadius:7,padding:'5px 10px',fontSize:11,fontWeight:700,flexShrink:0}}>🏷️ VAS</span>
                 </div>);
               })}
             </div>
@@ -895,11 +904,11 @@ export default function MalKabul() {
                       <p style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
                       <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{item.malzemeKodu||''}{item.malzemeKodu&&item.ean?' · ':''}{item.ean} · {item.adet} adet</p>
                     </div>
-                    <button onClick={()=>setVasItems(prev=>({...prev,[key]:item.adet}))} title="VAS'a gönder"
-                      style={{...S.btn,background:'#f3e8ff',color:'#7c3aed',padding:'5px 9px',fontSize:11,flexShrink:0}}>🏷️ VAS</button>
                     <input placeholder="Lokasyon" value={mkLokasyonlar[key]||''}
                       onChange={e=>setMkLokasyonlar(prev=>({...prev,[key]:e.target.value.trim().toUpperCase()}))}
-                      style={{width:100,padding:'5px 8px',border:'1px solid #e2e8f0',borderRadius:7,fontSize:11,fontFamily:'monospace',outline:'none',background:atandi?'#f0fdf4':'#fff',flexShrink:0}}/>
+                      style={{width:96,padding:'5px 8px',border:'1px solid #e2e8f0',borderRadius:7,fontSize:11,fontFamily:'monospace',outline:'none',background:atandi?'#f0fdf4':'#fff',flexShrink:0}}/>
+                    <button onClick={()=>setLokPickerFor(key)} title="Lokasyon seç"
+                      style={{background:'#1e40af',border:'none',borderRadius:7,color:'#fff',padding:'6px 9px',fontSize:13,cursor:'pointer',flexShrink:0}}>📍</button>
                   </div>
                   {atandi&&<p style={{fontSize:10,color:'#15803d',fontWeight:600,marginTop:3,marginLeft:2}}>✅ {mkLokasyonlar[key]} lokasyonuna atandı</p>}
                 </div>
@@ -910,6 +919,19 @@ export default function MalKabul() {
           <button onClick={()=>setView('mk_sayim')} style={{...S.btn,width:'100%',background:'#3b82f6',color:'#fff',marginBottom:10}}>➕ Daha Fazla Ürün Say</button>
           {isAdmin&&<button onClick={malKabulOnayla} disabled={loading||itemList.length===0} style={{...S.btn,width:'100%',background:'#10b981',color:'#fff',opacity:loading?.6:1}}>{loading?'İşleniyor...':'✅ Tamamla ve Stoğa Al'}</button>}
         </div>
+
+        {/* Lokasyon seçici modal */}
+        {lokPickerFor&&(
+          <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.5)',display:'flex',alignItems:'flex-end',justifyContent:'center',zIndex:400}}>
+            <div style={{background:'#fff',borderRadius:'20px 20px 0 0',width:'100%',maxWidth:500,maxHeight:'85vh',overflowY:'auto'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 16px',borderBottom:'1px solid #e2e8f0',position:'sticky',top:0,background:'#fff'}}>
+                <p style={{fontSize:14,fontWeight:700,color:'#0f172a'}}>📍 Lokasyon Seç</p>
+                <button onClick={()=>setLokPickerFor(null)} style={{background:'#f1f5f9',border:'none',borderRadius:8,padding:'6px 12px',fontSize:13,cursor:'pointer',fontWeight:600}}>Kapat</button>
+              </div>
+              <LokPicker onSelect={lok=>{setMkLokasyonlar(prev=>({...prev,[lokPickerFor]:lok}));setLokPickerFor(null);}}/>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
