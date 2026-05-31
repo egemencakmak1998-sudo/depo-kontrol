@@ -115,7 +115,7 @@ function LokPicker({ onSelect, currentLok, sayilanLoklar=[] }) {
       )}
 
       {/* Arama + Barkod */}
-      <div style={{display:'flex',gap:8,marginBottom:14}}>
+      <div style={{display:'flex',gap:8,marginBottom:10}}>
         <input value={search} onChange={e=>handleSearch(e.target.value)}
           placeholder="Kod yaz (örn: A109S013B)"
           style={{flex:1,padding:'9px 12px',border:'1px solid #e2e8f0',borderRadius:10,fontSize:13,outline:'none'}} />
@@ -124,6 +124,12 @@ function LokPicker({ onSelect, currentLok, sayilanLoklar=[] }) {
           {camOn?'⏹ Durdur':'📷 Tara'}
         </button>
       </div>
+
+      {/* HVZ havuz hızlı seçim */}
+      <button onClick={()=>handleSelect('HVZ')}
+        style={{width:'100%',background:'#fff7ed',border:'1px solid #fed7aa',borderRadius:10,padding:'9px 0',fontSize:13,fontWeight:700,cursor:'pointer',color:'#c2410c',marginBottom:14}}>
+        📦 HVZ — Havuz (Lokasyonsuz)
+      </button>
 
       {camOn&&(
         <div style={{marginBottom:12,borderRadius:10,overflow:'hidden',background:'#000',maxHeight:180}}>
@@ -462,22 +468,60 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
           </div>
         )}
 
-        {/* Bu lokasyondaki mevcut ürünler — her zaman görünür */}
+        {/* Bu lokasyondaki mevcut ürünler — her zaman görünür + hızlı doğrulama */}
         <div style={{background:'#eff6ff',borderRadius:10,padding:'10px 12px',marginBottom:12,border:'1px solid #bfdbfe'}}>
-          <p style={{fontSize:11,fontWeight:700,color:'#1d4ed8',marginBottom:8,textTransform:'uppercase',letterSpacing:1}}>📍 Bu Lokasyondaki Mevcut Ürünler</p>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+            <p style={{fontSize:11,fontWeight:700,color:'#1d4ed8',textTransform:'uppercase',letterSpacing:1}}>📍 Bu Lokasyondaki Mevcut Ürünler</p>
+            {lokMevcut.length>0&&(
+              <button onClick={()=>{
+                // Tüm mevcut ürünleri stok adetleriyle sayıma onayla
+                setEntries(prev=>{const n={...prev};lokMevcut.forEach(p=>{if(p.ean)n[p.ean]=(p.lokMiktar??0);});return n;});
+                toast$('Tüm ürünler stok adediyle onaylandı','success');
+              }} style={{background:'#1e40af',border:'none',borderRadius:7,color:'#fff',padding:'5px 10px',fontSize:11,fontWeight:700,cursor:'pointer'}}>
+                ✓ Tümünü Onayla
+              </button>
+            )}
+          </div>
           {lokLoading
             ? <p style={{fontSize:12,color:'#64748b',textAlign:'center',padding:'8px 0'}}>Yükleniyor...</p>
             : lokMevcut.length===0
               ? <p style={{fontSize:12,color:'#64748b',textAlign:'center',padding:'8px 0'}}>Bu lokasyonda kayıtlı ürün bulunmuyor</p>
-              : lokMevcut.map((p,i)=>(
-                  <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 0',borderBottom:i<lokMevcut.length-1?'1px solid #dbeafe':'none'}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <p style={{fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.urunAdi||'—'}</p>
-                      <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{p.malzemeKodu}{p.malzemeKodu&&p.ean?' · ':''}{p.ean}</p>
+              : lokMevcut.map((p,i)=>{
+                  const stokAdet=p.lokMiktar??0;
+                  const sayilan=p.ean!=null?entries[p.ean]:undefined;
+                  const onaylandi=sayilan!==undefined;
+                  const tutuyor=onaylandi&&sayilan===stokAdet;
+                  return (
+                  <div key={i} style={{padding:'7px 0',borderBottom:i<lokMevcut.length-1?'1px solid #dbeafe':'none'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <p style={{fontSize:12,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.urunAdi||'—'}</p>
+                        <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{p.malzemeKodu}{p.malzemeKodu&&p.ean?' · ':''}{p.ean}</p>
+                      </div>
+                      <span style={{fontSize:12,fontWeight:700,color:stokAdet<=0?'#ef4444':'#1d4ed8',flexShrink:0}}>Stok: {stokAdet}</span>
                     </div>
-                    <span style={{fontSize:13,fontWeight:700,color:p.lokMiktar<=0?'#ef4444':'#1d4ed8',flexShrink:0}}>{p.lokMiktar??'—'} adet</span>
+                    {p.ean&&(
+                      <div style={{display:'flex',alignItems:'center',gap:6,marginTop:6}}>
+                        <div style={{display:'flex',alignItems:'center',gap:4}}>
+                          <button onClick={()=>setEntries(prev=>({...prev,[p.ean]:Math.max(0,(prev[p.ean]??stokAdet)-1)}))}
+                            style={{width:26,height:26,borderRadius:6,border:'1px solid #cbd5e1',background:'#fff',cursor:'pointer',fontWeight:700,fontSize:15}}>−</button>
+                          <input type="number" value={onaylandi?sayilan:''} placeholder={String(stokAdet)}
+                            onChange={e=>setEntries(prev=>({...prev,[p.ean]:Math.max(0,parseInt(e.target.value)||0)}))}
+                            style={{width:48,textAlign:'center',border:'1px solid #cbd5e1',borderRadius:6,padding:'3px 0',fontSize:13,fontWeight:700,background:'#fff'}} />
+                          <button onClick={()=>setEntries(prev=>({...prev,[p.ean]:(prev[p.ean]??stokAdet)+1}))}
+                            style={{width:26,height:26,borderRadius:6,border:'1px solid #cbd5e1',background:'#fff',cursor:'pointer',fontWeight:700,fontSize:15}}>+</button>
+                        </div>
+                        {!onaylandi
+                          ? <button onClick={()=>setEntries(prev=>({...prev,[p.ean]:stokAdet}))}
+                              style={{background:'#dbeafe',border:'none',borderRadius:7,color:'#1e40af',padding:'5px 10px',fontSize:11,fontWeight:700,cursor:'pointer'}}>✓ Onayla</button>
+                          : tutuyor
+                            ? <span style={{background:'#dcfce7',color:'#15803d',borderRadius:7,padding:'5px 10px',fontSize:11,fontWeight:700}}>✅ Tutuyor</span>
+                            : <span style={{background:'#fef3c7',color:'#d97706',borderRadius:7,padding:'5px 10px',fontSize:11,fontWeight:700}}>⚠️ Fark: {sayilan-stokAdet>0?'+':''}{sayilan-stokAdet}</span>
+                        }
+                      </div>
+                    )}
                   </div>
-                ))
+                );})
           }
         </div>
         {itemList.length===0&&<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'16px 0'}}>Henüz ürün taranmadı</p>}
@@ -582,6 +626,17 @@ export default function DepoSayimi() {
     setLokLoading(true);
     try {
       try { localStorage.setItem('depoKontrol:sayim:lastLok', lok); } catch {}
+      if(lok==='HVZ'){
+        // Havuz: stok'ta byLocation.HVZ > 0 olan ürünler
+        const stockSnap = await getDocs(collection(db,'stock'));
+        const hvzItems = stockSnap.docs
+          .map(d=>({ean:d.id,...d.data()}))
+          .filter(s=>(s.byLocation?.HVZ??0)>0)
+          .map(s=>({ean:s.ean,urunAdi:s.urunAdi||'',malzemeKodu:s.malzemeKodu||'',lokMiktar:s.byLocation.HVZ}));
+        setLokMevcut(hvzItems.sort((a,b)=>(a.urunAdi||'').localeCompare(b.urunAdi||'')));
+        setLokLoading(false);
+        return;
+      }
       const snap = await getDocs(query(collection(db,'products'), where('locations','array-contains',lok)));
       const prods = snap.docs.map(d=>({id:d.id,...d.data()}));
       const withStock = await Promise.all(prods.map(async p => {
