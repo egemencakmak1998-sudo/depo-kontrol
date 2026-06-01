@@ -207,7 +207,7 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
 
   /* ── Kamera ── */
   const videoRef=useRef(null);const streamRef=useRef(null);const detRef=useRef(null);const rafRef=useRef(null);
-  const lockedBcRef=useRef('');const noBcFrameRef=useRef(0);
+  const lockedBcRef=useRef('');const noBcFrameRef=useRef(0);const lastScanTsRef=useRef(0);
   const inputRef=useRef(null);const scanFnRef=useRef(null);
   const toast$=useCallback((msg,type='info')=>setToast({msg,type,id:Date.now()}),[]);
 
@@ -276,9 +276,20 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
       setCamOn(true);
       const loop=async()=>{
         if(videoRef.current?.readyState>=2&&detRef.current){
+          const MISS_FRAMES=12;       // kilidi açmak için boş frame eşiği (el titremesi koruması)
+          const SCAN_COOLDOWN=2000;   // aynı kod bu süre içinde tekrar sayılamaz
           try{const res=await detRef.current.detect(videoRef.current);
-            if(!res.length){noBcFrameRef.current++;if(noBcFrameRef.current>=8)lockedBcRef.current='';}
-            else{noBcFrameRef.current=0;const bc=String(res[0].rawValue||'').trim();if(bc&&bc!==lockedBcRef.current){lockedBcRef.current=bc;scanFnRef.current?.(bc);}}}catch{}
+            if(!res.length){noBcFrameRef.current++;if(noBcFrameRef.current>=MISS_FRAMES)lockedBcRef.current='';}
+            else{
+              noBcFrameRef.current=0;
+              const bc=String(res[0].rawValue||'').trim();
+              const now=Date.now();
+              if(bc&&bc!==lockedBcRef.current&&now-lastScanTsRef.current>=SCAN_COOLDOWN){
+                lockedBcRef.current=bc;
+                lastScanTsRef.current=now;
+                scanFnRef.current?.(bc);
+              }
+            }}catch{}
         }
         rafRef.current=requestAnimationFrame(loop);
       };
