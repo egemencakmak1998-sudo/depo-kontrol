@@ -273,6 +273,7 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
   const detRef = useRef(null);
   const rafRef = useRef(null);
   const lastBcRef = useRef({code:'',ts:0});
+  const missFramesRef = useRef(0); // kod kaç ardışık frame'dir kadrajda değil
   const entriesRef = useRef(entries);
   useEffect(()=>{entriesRef.current=entries;},[entries]);
   // Lokasyon değişince sayım state'ini sıfırla (yeni lokasyon = yeni sayım)
@@ -286,15 +287,31 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
 
   const scan = useCallback(()=>{
     if(!videoRef.current||!detRef.current) return;
+    const SCAN_COOLDOWN=2500;       // aynı kod bu süre içinde tekrar sayılamaz
+    const MISS_FRAMES_REQUIRED=8;   // yeniden saymak için kod bu kadar frame kadrajdan çıkmalı
     detRef.current.detect(videoRef.current).then(res=>{
+      const now=Date.now();
       if(res.length>0){
-        const code=res[0].rawValue; const now=Date.now();
-        if(code!==lastBcRef.current.code||now-lastBcRef.current.ts>2000){
+        const code=String(res[0].rawValue).trim();
+        const last=lastBcRef.current;
+        const ayniKod=code===last.code;
+        const cooldownGecti=now-last.ts>SCAN_COOLDOWN;
+        // Aynı kod: hem cooldown geçmeli HEM de arada kadrajdan çıkmış olmalı (el titremesi koruması)
+        // Farklı kod: doğrudan say
+        const kabul = !ayniKod || (cooldownGecti && missFramesRef.current>=MISS_FRAMES_REQUIRED);
+        if(kabul){
           lastBcRef.current={code,ts:now};
-          const ean=String(code).trim();
+          missFramesRef.current=0;
+          const ean=code;
           setEntries(prev=>({...prev,[ean]:(prev[ean]||0)+1}));
           toast$(products[ean]?.urunAdi||ean,'success');
+        } else {
+          // Aynı kod hâlâ kadrajda — kayıp sayacını sıfırla
+          missFramesRef.current=0;
         }
+      } else {
+        // Kadrajda kod yok — kayıp sayacını artır
+        if(missFramesRef.current<999) missFramesRef.current++;
       }
       rafRef.current=requestAnimationFrame(scan);
     }).catch(()=>{rafRef.current=requestAnimationFrame(scan);});
@@ -675,6 +692,13 @@ export default function DepoSayimi() {
   },[user]);
 
   const startSession = async(tip) => {
+    // Devam eden genel sayım varsa yeni başlatmaya izin verme
+    const aktifGenel = sessions.filter(s=>s.durum==='aktif'&&s.tip==='genel');
+    if(tip==='genel'&&aktifGenel.length>0){
+      toast$('Zaten devam eden bir genel sayım var. Önce onu tamamlayın veya silin.','error');
+      return;
+    }
+    if(tip==='genel'&&!window.confirm('Yeni bir genel depo sayımı başlatılacak.\n\nTüm lokasyonlar yeniden sayılacak. Devam edilsin mi?')) return;
     setLoading(true);
     try {
       const ref=await addDoc(collection(db,'countSessions'),{
@@ -956,11 +980,12 @@ export default function DepoSayimi() {
       </div>
       <div style={{padding:16}}>
         {isAdmin&&(
-          <div style={{display:'flex',gap:10,marginBottom:16}}>
-            <button onClick={()=>startSession('genel')} disabled={loading}
-              style={{...S.btn,flex:1,background:'#1e40af',color:'#fff'}}>
+          <div style={{marginBottom:16}}>
+            <button onClick={()=>startSession('genel')} disabled={loading||aktifler.length>0}
+              style={{...S.btn,width:'100%',background:aktifler.length>0?'#cbd5e1':'#1e40af',color:'#fff',cursor:aktifler.length>0?'not-allowed':'pointer'}}>
               📦 Genel Sayım Başlat
             </button>
+            {aktifler.length>0&&<p style={{fontSize:11,color:'#d97706',marginTop:6,fontWeight:600}}>⚠️ Devam eden bir genel sayım var. Yeni sayım için önce mevcut sayımı tamamlayın veya silin.</p>}
           </div>
         )}
 
