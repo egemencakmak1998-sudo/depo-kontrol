@@ -3,7 +3,7 @@ import { collection, addDoc, getDocs, doc, updateDoc, setDoc, deleteDoc,
          query, where, orderBy, Timestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
-import { useDepo, stokDocId } from '../contexts/DepoContext.jsx';
+import { useDepo, stokDocId, isMainDepo } from '../contexts/DepoContext.jsx';
 import * as XLSX from 'xlsx';
 
 /* ── localStorage ── */
@@ -714,7 +714,7 @@ export default function MalKabul() {
           }
         }
       }
-      const stockSnap=await getDocs(query(collection(db,'stock'),where('depoId','==',selectedDepo)));
+      const stockSnap=await getDocs(isMainDepo(selectedDepo)?collection(db,'stock'):query(collection(db,'stock'),where('depoId','==',selectedDepo)));
       const stockMap={};stockSnap.docs.forEach(d=>{stockMap[d.id]=d.data();});
       const batch=writeBatch(db);const movBatch=writeBatch(db);
       itemList.forEach(item=>{
