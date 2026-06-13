@@ -3,6 +3,7 @@ import { collection, addDoc, getDocs, getDoc, doc, updateDoc, deleteDoc,
          query, where, orderBy, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
+import { useDepo, stokDocId } from '../contexts/DepoContext.jsx';
 
 function Toast({ msg, type, onDone }) {
   const bg={success:'#10b981',error:'#ef4444',warning:'#f59e0b',info:'#3b82f6'};
@@ -248,7 +249,9 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
   const [saving, setSaving] = useState(false);
   const [showHasar, setShowHasar] = useState(false);
   const [toast, setToast] = useState(null);
+  const [lastScannedEan, setLastScannedEan] = useState(null);
   const toast$ = (msg,type='info') => setToast({msg,type,id:Date.now()});
+  const lastItemRef = useRef(null);
 
   // Lokasyon navigasyonu — A{kor}S{raf}{kat}
   const KATS_NAV = ['A','B','C','D','E','F'];
@@ -304,6 +307,8 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
           missFramesRef.current=0;
           const ean=code;
           setEntries(prev=>({...prev,[ean]:(prev[ean]||0)+1}));
+          setLastScannedEan(ean);
+          setTimeout(()=>{if(lastItemRef.current)lastItemRef.current.scrollIntoView({behavior:'smooth',block:'center'});},120);
           toast$(products[ean]?.urunAdi||ean,'success');
         } else {
           // Aynı kod hâlâ kadrajda — kayıp sayacını sıfırla
@@ -334,6 +339,8 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
     if(e.key!=='Enter') return;
     const ean=barInput.trim(); if(!ean) return;
     setEntries(prev=>({...prev,[ean]:(prev[ean]||0)+1}));
+    setLastScannedEan(ean);
+    setTimeout(()=>{if(lastItemRef.current)lastItemRef.current.scrollIntoView({behavior:'smooth',block:'center'});},120);
     toast$(products[ean]?.urunAdi||ean,'success');
     setBarInput('');
   };
@@ -545,8 +552,12 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
         {itemList.map(([ean,adet])=>{
           const p=products[ean]||{};
           const hasar=hasarlilar[ean]||0;
+          const isLast=ean===lastScannedEan;
           return (
-            <div key={ean} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 0',borderBottom:'1px solid #f1f5f9'}}>
+            <div key={ean} ref={isLast?lastItemRef:null}
+              style={{display:'flex',alignItems:'center',gap:10,padding:'8px 10px',marginBottom:4,borderRadius:10,transition:'all .3s',
+                background:isLast?'#dbeafe':'transparent',border:isLast?'2px solid #3b82f6':'2px solid transparent',
+                boxShadow:isLast?'0 0 10px rgba(59,130,246,.25)':'none'}}>
               <div style={{flex:1,minWidth:0}}>
                 <p style={{fontSize:13,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.urunAdi||ean}</p>
                 <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{p.malzemeKodu||''}{p.malzemeKodu&&ean?' · ':''}{ean}{hasar>0&&<span style={{color:'#d97706',marginLeft:8}}>⚠️ {hasar} hasarlı</span>}</p>
@@ -571,6 +582,7 @@ function SayimEkrani({ lokasyon, sessionId, sessionTip, products, lokMevcut=[], 
 /* ── ANA COMPONENT ── */
 export default function DepoSayimi() {
   const { user, profile } = useAuth();
+  const { selectedDepo, depoInfo } = useDepo();
   const isAdmin = profile?.role==='admin';
 
   const [view, setView] = useState('list');
@@ -645,7 +657,7 @@ export default function DepoSayimi() {
       try { localStorage.setItem('depoKontrol:sayim:lastLok', lok); } catch {}
       if(lok==='HVZ'){
         // Havuz: stok'ta byLocation.HVZ > 0 olan ürünler
-        const stockSnap = await getDocs(collection(db,'stock'));
+        const stockSnap = await getDocs(query(collection(db,'stock'),where('depoId','==',selectedDepo)));
         const hvzItems = stockSnap.docs
           .map(d=>({ean:d.id,...d.data()}))
           .filter(s=>(s.byLocation?.HVZ??0)>0)
@@ -658,7 +670,7 @@ export default function DepoSayimi() {
       const prods = snap.docs.map(d=>({id:d.id,...d.data()}));
       const withStock = await Promise.all(prods.map(async p => {
         if(!p.ean) return {...p, lokMiktar:null};
-        const s = await getDoc(doc(db,'stock',p.ean));
+        const s = await getDoc(doc(db,'stock',stokDocId(selectedDepo,p.ean)));
         if(!s.exists()) return {...p, lokMiktar:null};
         const lokM = s.data().byLocation?.[lok] ?? null;
         const totM = s.data().miktar ?? null;
