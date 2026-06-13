@@ -1,4 +1,5 @@
 import { useAuth } from '../contexts/AuthContext.jsx';
+import { useDepo } from '../contexts/DepoContext.jsx';
 
 const NAV = [
   { id:'dashboard', label:'Ana Sayfa',    icon:'🏠' },
@@ -6,6 +7,8 @@ const NAV = [
   { id:'iade',      label:'İade',         icon:'↩️' },
   { id:'sayim',     label:'Sayım',        icon:'🔢' },
   { id:'malkabul',  label:'Mal Kabul',    icon:'📥' },
+  { id:'egitim',    label:'Eğitim',       icon:'🎓' },
+  { id:'transfer',  label:'Transfer',     icon:'🔄' },
   { id:'raporlar',  label:'Raporlar',     icon:'📊' },
 ];
 
@@ -30,10 +33,18 @@ const C = {
     gap:3, border:'none', background:'transparent', cursor:'pointer',
     color: active ? '#60a5fa' : '#64748b', fontSize:10, fontWeight: active?600:400,
   }),
+  depoBtn: (active, color) => ({
+    flex:1, border: active ? `2px solid ${color}` : '2px solid rgba(255,255,255,.15)',
+    borderRadius:8, padding:'7px 4px', cursor:'pointer', textAlign:'center',
+    background: active ? color+'22' : 'transparent',
+    color: active ? '#f8fafc' : '#64748b', fontSize:11, fontWeight:600,
+    transition:'all .15s',
+  }),
 };
 
 export default function Layout({ page, navigate, profile, children }) {
   const { logout } = useAuth();
+  const { selectedDepo, setSelectedDepo, depoInfo, DEPOLAR } = useDepo();
   const isAdmin = profile?.role === 'admin';
   const navItems = isAdmin
     ? [...NAV, { id:'dosya', label:'Dosya Araçları', icon:'🗂️' }, { id:'stok', label:'Stok', icon:'📦' }, { id:'yonetici', label:'Yönetici', icon:'⚙️' }]
@@ -47,6 +58,19 @@ export default function Layout({ page, navigate, profile, children }) {
           <p style={{ color:'#f8fafc', fontWeight:700, fontSize:16 }}>📦 Depo Kontrol</p>
           <p style={{ color:'#64748b', fontSize:11, marginTop:3 }}>{profile?.name}</p>
           <p style={{ color:'#475569', fontSize:10 }}>{isAdmin ? '👑 Yönetici' : '👤 Operatör'}</p>
+        </div>
+        {/* Depo seçici */}
+        <div style={{ padding:'10px 12px', borderBottom:'1px solid rgba(255,255,255,.08)' }}>
+          <p style={{ fontSize:9, fontWeight:600, color:'#475569', textTransform:'uppercase', letterSpacing:1.5, marginBottom:6 }}>Aktif Depo</p>
+          <div style={{ display:'flex', gap:6 }}>
+            {DEPOLAR.map(d => (
+              <button key={d.id} style={C.depoBtn(selectedDepo===d.id, d.color)}
+                onClick={() => setSelectedDepo(d.id)}>
+                <span style={{ fontSize:14, display:'block', marginBottom:2 }}>{d.icon}</span>
+                {d.short}
+              </button>
+            ))}
+          </div>
         </div>
         <nav style={{ flex:1, paddingTop:8 }}>
           {navItems.map(n => (
@@ -64,6 +88,23 @@ export default function Layout({ page, navigate, profile, children }) {
 
       {/* Main content */}
       <div style={C.main} className="desktop-main">
+        {/* Mobil depo göstergesi */}
+        <div className="mobile-only" style={{ background:depoInfo.color, padding:'8px 16px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <span style={{ fontSize:16 }}>{depoInfo.icon}</span>
+            <p style={{ color:'#fff', fontWeight:700, fontSize:13 }}>{depoInfo.label}</p>
+          </div>
+          <div style={{ display:'flex', gap:4 }}>
+            {DEPOLAR.map(d => (
+              <button key={d.id} onClick={() => setSelectedDepo(d.id)}
+                style={{ border:'none', borderRadius:6, padding:'4px 10px', fontSize:11, fontWeight:700, cursor:'pointer',
+                  background: selectedDepo===d.id ? '#fff' : 'rgba(255,255,255,.2)',
+                  color: selectedDepo===d.id ? d.color : '#fff' }}>
+                {d.short}
+              </button>
+            ))}
+          </div>
+        </div>
         <div style={{ paddingBottom:70 }}>
           {children}
         </div>
