@@ -1,7 +1,7 @@
 import { useAuth } from '../contexts/AuthContext.jsx';
 import { useDepo } from '../contexts/DepoContext.jsx';
 
-const NAV = [
+const FULL_NAV = [
   { id:'dashboard', label:'Ana Sayfa',    icon:'🏠' },
   { id:'siparis',   label:'Sipariş',      icon:'📋' },
   { id:'iade',      label:'İade',         icon:'↩️' },
@@ -10,6 +10,13 @@ const NAV = [
   { id:'egitim',    label:'Eğitim',       icon:'🎓' },
   { id:'transfer',  label:'Transfer',     icon:'🔄' },
   { id:'raporlar',  label:'Raporlar',     icon:'📊' },
+];
+
+const MINI_NAV = [
+  { id:'dashboard', label:'Ana Sayfa',    icon:'🏠' },
+  { id:'stok',      label:'Stok',         icon:'📦' },
+  { id:'egitim',    label:'Eğitim',       icon:'🎓' },
+  { id:'transfer',  label:'Transfer',     icon:'🔄' },
 ];
 
 const C = {
@@ -46,9 +53,14 @@ export default function Layout({ page, navigate, profile, children }) {
   const { logout } = useAuth();
   const { selectedDepo, setSelectedDepo, depoInfo, DEPOLAR } = useDepo();
   const isAdmin = profile?.role === 'admin';
-  const navItems = isAdmin
-    ? [...NAV, { id:'dosya', label:'Dosya Araçları', icon:'🗂️' }, { id:'stok', label:'Stok', icon:'📦' }, { id:'yonetici', label:'Yönetici', icon:'⚙️' }]
-    : [...NAV, { id:'stok', label:'Stok', icon:'📦' }];
+  const isFull = depoInfo.full;
+
+  const baseNav = isFull ? FULL_NAV : MINI_NAV;
+  const navItems = isAdmin && isFull
+    ? [...baseNav, { id:'dosya', label:'Dosya Araçları', icon:'🗂️' }, { id:'stok', label:'Stok', icon:'📦' }, { id:'yonetici', label:'Yönetici', icon:'⚙️' }]
+    : isFull
+      ? [...baseNav, { id:'stok', label:'Stok', icon:'📦' }]
+      : baseNav;
 
   return (
     <div>
@@ -62,24 +74,24 @@ export default function Layout({ page, navigate, profile, children }) {
         {/* Depo seçici */}
         <div style={{ padding:'10px 12px', borderBottom:'1px solid rgba(255,255,255,.08)' }}>
           <p style={{ fontSize:9, fontWeight:600, color:'#475569', textTransform:'uppercase', letterSpacing:1.5, marginBottom:6 }}>Aktif Depo</p>
-          <div style={{ display:'flex', gap:6 }}>
+          <div style={{ display:'flex', gap:4 }}>
             {DEPOLAR.map(d => (
               <button key={d.id} style={C.depoBtn(selectedDepo===d.id, d.color)}
-                onClick={() => setSelectedDepo(d.id)}>
-                <span style={{ fontSize:14, display:'block', marginBottom:2 }}>{d.icon}</span>
-                {d.short}
+                onClick={() => { setSelectedDepo(d.id); navigate('dashboard'); }}>
+                <span style={{ fontSize:12, display:'block', marginBottom:1 }}>{d.icon}</span>
+                <span style={{ fontSize:10 }}>{d.short}</span>
               </button>
             ))}
           </div>
         </div>
-        <nav style={{ flex:1, paddingTop:8 }}>
+        <nav style={{ flex:1, paddingTop:8, overflowY:'auto' }}>
           {navItems.map(n => (
             <button key={n.id} style={C.navItem(page===n.id)} onClick={() => navigate(n.id)}>
               <span style={{ fontSize:16 }}>{n.icon}</span> {n.label}
             </button>
           ))}
         </nav>
-        <div style={{ padding:16, borderTop:'1px solid rgba(255,255,255,.08)' }}>
+        <div style={{ padding:16, borderTop:'1px solid rgba(255,255,255,.08)', flexShrink:0 }}>
           <button onClick={logout} style={{ ...C.navItem(false), color:'#ef4444' }}>
             <span>🚪</span> Çıkış Yap
           </button>
@@ -96,8 +108,8 @@ export default function Layout({ page, navigate, profile, children }) {
           </div>
           <div style={{ display:'flex', gap:4 }}>
             {DEPOLAR.map(d => (
-              <button key={d.id} onClick={() => setSelectedDepo(d.id)}
-                style={{ border:'none', borderRadius:6, padding:'4px 10px', fontSize:11, fontWeight:700, cursor:'pointer',
+              <button key={d.id} onClick={() => { setSelectedDepo(d.id); navigate('dashboard'); }}
+                style={{ border:'none', borderRadius:6, padding:'4px 8px', fontSize:10, fontWeight:700, cursor:'pointer',
                   background: selectedDepo===d.id ? '#fff' : 'rgba(255,255,255,.2)',
                   color: selectedDepo===d.id ? d.color : '#fff' }}>
                 {d.short}
