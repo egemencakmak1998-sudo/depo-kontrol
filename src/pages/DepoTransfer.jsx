@@ -3,7 +3,7 @@ import { collection, addDoc, getDocs, doc, getDoc, setDoc,
          query, where, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
-import { useDepo, DEPOLAR, DEPO_MAP, stokDocId } from '../contexts/DepoContext.jsx';
+import { useDepo, DEPOLAR, DEPO_MAP, stokDocId, isMainDepo } from '../contexts/DepoContext.jsx';
 import * as XLSX from 'xlsx';
 
 function Toast({msg,type,onDone}){const bg={success:'#10b981',error:'#ef4444',warning:'#f59e0b',info:'#3b82f6'};useEffect(()=>{const t=setTimeout(onDone,3500);return()=>clearTimeout(t);},[onDone]);return(<div style={{position:'fixed',top:20,left:'50%',transform:'translateX(-50%)',background:bg[type]||bg.info,color:'#fff',padding:'10px 20px',borderRadius:10,fontSize:13,fontWeight:600,zIndex:999,boxShadow:'0 4px 20px rgba(0,0,0,.25)'}}>{msg}</div>);}
