@@ -3,6 +3,7 @@ import { collection, addDoc, getDocs, doc, updateDoc, setDoc, deleteDoc,
          query, where, orderBy, Timestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
+import { useDepo, stokDocId } from '../contexts/DepoContext.jsx';
 import * as XLSX from 'xlsx';
 
 /* ── localStorage ── */
@@ -209,6 +210,7 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
   const videoRef=useRef(null);const streamRef=useRef(null);const detRef=useRef(null);const rafRef=useRef(null);
   const lockedBcRef=useRef('');const noBcFrameRef=useRef(0);const lastScanTsRef=useRef(0);
   const inputRef=useRef(null);const scanFnRef=useRef(null);
+  const lastItemRef=useRef(null);
   const toast$=useCallback((msg,type='info')=>setToast({msg,type,id:Date.now()}),[]);
 
   const getKey = item => item?.ean||item?.malzemeKodu||'';
@@ -240,6 +242,8 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
   },[findItem,isRef,toast$,updateCounts,updateEksikSet]);
 
   useEffect(()=>{scanFnRef.current=processScan;},[processScan]);
+  // Barkod okutulunca son ürüne scroll et
+  useEffect(()=>{if(lastScan?.found&&lastItemRef.current)setTimeout(()=>lastItemRef.current?.scrollIntoView({behavior:'smooth',block:'center'}),120);},[lastScan]);
 
   const undoLast=useCallback(()=>{
     setScanHistory(prev=>{
@@ -442,8 +446,10 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
           const status=getStatus(item);const st=ST[status]||ST.pending;
           const hasar=hasarlilar[key]||0;const pct=item.beklenen>0?Math.min(100,(cnt/item.beklenen)*100):0;
           const isVas=vasSet.has(key);const isEksik=eksikSet.has(key);
+          const isLastScanned=lastScan?.found&&(lastScan.code===item.ean||lastScan.code===item.malzemeKodu||key===getKey(lastScan.item));
           return(
-            <div key={key} style={{background:st.card,border:`1px solid ${isEksik?'#94a3b8':st.border}`,borderRadius:14,padding:'11px 12px',marginBottom:7,opacity:isEksik?.7:1}}>
+            <div key={key} ref={isLastScanned?lastItemRef:null}
+              style={{background:isLastScanned?'#dbeafe':st.card,border:`2px solid ${isLastScanned?'#3b82f6':isEksik?'#94a3b8':st.border}`,borderRadius:14,padding:'11px 12px',marginBottom:7,opacity:isEksik?.7:1,transition:'all .3s',boxShadow:isLastScanned?'0 0 12px rgba(59,130,246,.3)':'none'}}>
               <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                 <div style={{width:8,height:8,borderRadius:'50%',flexShrink:0,background:st.dot}}/>
                 <div style={{flex:1,minWidth:100}}>
@@ -497,6 +503,7 @@ function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onB
 /* ── ANA COMPONENT ── */
 export default function MalKabul() {
   const { user, profile } = useAuth();
+  const { selectedDepo, depoInfo } = useDepo();
   const isAdmin = profile?.role==='admin';
 
   const [view,         setView]         = useState('list');
@@ -707,7 +714,7 @@ export default function MalKabul() {
           }
         }
       }
-      const stockSnap=await getDocs(collection(db,'stock'));
+      const stockSnap=await getDocs(query(collection(db,'stock'),where('depoId','==',selectedDepo)));
       const stockMap={};stockSnap.docs.forEach(d=>{stockMap[d.id]=d.data();});
       const batch=writeBatch(db);const movBatch=writeBatch(db);
       itemList.forEach(item=>{
@@ -724,7 +731,7 @@ export default function MalKabul() {
         const lok=mkLokasyonlar[item.ean]||mkLokasyonlar[item.malzemeKodu]||'HVZ';
         const prevByLok=stockMap[item.ean]?.byLocation||{};
         const newByLok={...prevByLok,[lok]:(prevByLok[lok]||0)+lokAdet};
-        batch.set(doc(db,'stock',item.ean),{ean:item.ean,miktar:next,urunAdi:item.urunAdi||'',malzemeKodu:item.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
+        batch.set(doc(db,'stock',stokDocId(selectedDepo,item.ean)),{ean:item.ean,miktar:next,urunAdi:item.urunAdi||'',malzemeKodu:item.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
         movBatch.set(doc(collection(db,'stockMovements')),{tarih:now,tip:'mal_kabul',ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',miktar:lokAdet,oncekiMiktar:prev,sonrakiMiktar:next,hasarliAdet:item.hasarliAdet||0,vasAdet,lokAdet,lokasyon:lok,kaynak:`mal_kabul:${activeSession.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
       });
       await batch.commit();await movBatch.commit();
@@ -770,7 +777,7 @@ export default function MalKabul() {
       const prevByLok=stockSnap.empty?{}:(stockSnap.docs[0].data().byLocation||{});
       const next=prev+vasItem.adet;
       const newByLok={...prevByLok,[lokasyon]:(prevByLok[lokasyon]||0)+vasItem.adet};
-      await setDoc(doc(db,'stock',vasItem.ean),{ean:vasItem.ean,miktar:next,urunAdi:vasItem.urunAdi||'',malzemeKodu:vasItem.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
+      await setDoc(doc(db,'stock',stokDocId(selectedDepo,vasItem.ean)),{ean:vasItem.ean,miktar:next,urunAdi:vasItem.urunAdi||'',malzemeKodu:vasItem.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
       await updateDoc(doc(db,'vasItems',vasItem.id),{durum:'tamamlandi',lokasyon,bitis:now});
       await addDoc(collection(db,'stockMovements'),{tarih:now,tip:'vas_lokasyon',ean:vasItem.ean,malzemeKodu:vasItem.malzemeKodu||'',urunAdi:vasItem.urunAdi||'',miktar:vasItem.adet,oncekiMiktar:prev,sonrakiMiktar:next,lokasyon,kaynak:`vas:${vasItem.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
       setVasList(prev=>prev.filter(v=>v.id!==vasItem.id));
