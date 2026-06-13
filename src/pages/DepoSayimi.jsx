@@ -3,7 +3,7 @@ import { collection, addDoc, getDocs, getDoc, doc, updateDoc, deleteDoc,
          query, where, orderBy, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
-import { useDepo, stokDocId } from '../contexts/DepoContext.jsx';
+import { useDepo, stokDocId, isMainDepo } from '../contexts/DepoContext.jsx';
 
 function Toast({ msg, type, onDone }) {
   const bg={success:'#10b981',error:'#ef4444',warning:'#f59e0b',info:'#3b82f6'};
@@ -657,7 +657,7 @@ export default function DepoSayimi() {
       try { localStorage.setItem('depoKontrol:sayim:lastLok', lok); } catch {}
       if(lok==='HVZ'){
         // Havuz: stok'ta byLocation.HVZ > 0 olan ürünler
-        const stockSnap = await getDocs(query(collection(db,'stock'),where('depoId','==',selectedDepo)));
+        const stockSnap = await getDocs(isMainDepo(selectedDepo)?collection(db,'stock'):query(collection(db,'stock'),where('depoId','==',selectedDepo)));
         const hvzItems = stockSnap.docs
           .map(d=>({ean:d.id,...d.data()}))
           .filter(s=>(s.byLocation?.HVZ??0)>0)
