@@ -3,6 +3,7 @@ import { collection, getDocs, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc,
          query, where, orderBy, limit, writeBatch, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
+import { useDepo, stokDocId } from '../contexts/DepoContext.jsx';
 import * as XLSX from 'xlsx';
 
 function Toast({ msg, type, onDone }) {
@@ -74,6 +75,7 @@ function ProductRow({ p, isAdmin, onAdjust }) {
 
 export default function Stok() {
   const { user, profile } = useAuth();
+  const { selectedDepo, depoInfo } = useDepo();
   const isAdmin = profile?.role === 'admin';
 
   const TABS = isAdmin
@@ -162,7 +164,7 @@ export default function Stok() {
   const loadHvz = useCallback(async () => {
     setHvzLoading(true);
     try {
-      const snap = await getDocs(collection(db,'stock'));
+      const snap = await getDocs(query(collection(db,'stock'),where('depoId','==',selectedDepo)));
       const items = snap.docs
         .map(d => ({ ean:d.id, ...d.data() }))
         .filter(s => (s.byLocation?.HVZ ?? 0) > 0)
@@ -220,7 +222,7 @@ export default function Stok() {
       const prods = snap.docs.map(d => ({ id:d.id, ...d.data() }));
       const withStock = await Promise.all(prods.map(async p => {
         if (!p.ean) return { ...p, miktar:null, totalMiktar:null };
-        const s = await getDoc(doc(db,'stock',p.ean));
+        const s = await getDoc(doc(db,'stock',stokDocId(selectedDepo,p.ean)));
         if (!s.exists()) return { ...p, miktar:null, totalMiktar:null };
         const data = s.data();
         const lokMiktar = data.byLocation?.[rafKod] ?? null;
@@ -345,7 +347,7 @@ export default function Stok() {
           .slice(0,40);
         const withStock = await Promise.all(matched.map(async p => {
           if (!p.ean) return {...p,miktar:null};
-          const s = await getDoc(doc(db,'stock',p.ean));
+          const s = await getDoc(doc(db,'stock',stokDocId(selectedDepo,p.ean)));
           return {...p, miktar: s.exists()?(s.data().miktar??null):null};
         }));
         setSearchRes(withStock);
@@ -400,7 +402,7 @@ export default function Stok() {
           if (cMiktar<0 && rows[hIdx]?.length>0) cMiktar=rows[hIdx].length-1;
           if (cMiktar<0) { toast$('Miktar sütunu bulunamadı','error'); setImpLoading(false); return; }
 
-          const existing = await getDocs(collection(db,'stock'));
+          const existing = await getDocs(query(collection(db,'stock'),where('depoId','==',selectedDepo)));
           const delBatch = writeBatch(db);
           existing.docs.forEach(d => delBatch.delete(d.ref));
           await delBatch.commit();
@@ -429,7 +431,7 @@ export default function Stok() {
           });
 
           Object.values(eanDataMap).forEach(item => {
-            stockBatch.set(doc(db,'stock',item.ean), {
+            stockBatch.set(doc(db,'stock',stokDocId(selectedDepo,item.ean)), {
               ean:item.ean, miktar:item.miktar, urunAdi:item.urunAdi,
               malzemeKodu:item.malzemeKodu, byLocation:item.byLocation, sonGuncelleme:now
             });
@@ -486,7 +488,7 @@ export default function Stok() {
             if (p.malzemeKodu) eanByCode[p.malzemeKodu] = p;
             if (p.ean) eanByCode[p.ean] = p;
           });
-          const stockSnap = await getDocs(collection(db,'stock'));
+          const stockSnap = await getDocs(query(collection(db,'stock'),where('depoId','==',selectedDepo)));
           const stockMap = {};
           stockSnap.docs.forEach(d => { stockMap[d.id] = d.data(); });
 
@@ -523,7 +525,7 @@ export default function Stok() {
     setImpLoading(true);
     try {
       const now = Timestamp.now();
-      const stockSnap = await getDocs(collection(db,'stock'));
+      const stockSnap = await getDocs(query(collection(db,'stock'),where('depoId','==',selectedDepo)));
       const stockMap = {};
       stockSnap.docs.forEach(d => { stockMap[d.id] = d.data(); });
       const batch = writeBatch(db);
@@ -534,7 +536,7 @@ export default function Stok() {
         const lok = lokasyonlar[item.ean];
         const prevByLok = stockMap[item.ean]?.byLocation || {};
         const newByLok = { ...prevByLok, [lok]: (prevByLok[lok]||0) + item.miktar };
-        batch.set(doc(db,'stock',item.ean), {
+        batch.set(doc(db,'stock',stokDocId(selectedDepo,item.ean)), {
           ean:item.ean, miktar:next, urunAdi:item.urunAdi||'',
           malzemeKodu:item.malzemeKodu||'', byLocation:newByLok, sonGuncelleme:now
         }, {merge:true});
