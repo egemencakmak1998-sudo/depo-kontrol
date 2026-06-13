@@ -1,1176 +1,1127 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { collection, getDocs, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc,
-         query, where, orderBy, limit, writeBatch, Timestamp } from 'firebase/firestore';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { collection, addDoc, getDocs, doc, updateDoc, setDoc, deleteDoc,
+         query, where, orderBy, Timestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
-import { useDepo, stokDocId, isMainDepo } from '../contexts/DepoContext.jsx';
+import { useDepo, stokDocId } from '../contexts/DepoContext.jsx';
 import * as XLSX from 'xlsx';
 
+/* ── localStorage ── */
+const MK_KEY = id => `depoKontrol:malKabul:${id}`;
+const readMkDraft  = id => { try { const r=localStorage.getItem(MK_KEY(id)); return r?JSON.parse(r):null; } catch { return null; } };
+const writeMkDraft = (id,data) => { try { localStorage.setItem(MK_KEY(id),JSON.stringify({...data,savedAt:Date.now()})); } catch {} };
+const clearMkDraft = id => { try { localStorage.removeItem(MK_KEY(id)); } catch {} };
+const SETUP_KEY = 'depoKontrol:malKabul:setup';
+const readSetupDraft  = () => { try { const r=localStorage.getItem(SETUP_KEY); return r?JSON.parse(r):null; } catch { return null; } };
+const writeSetupDraft = data => { try { localStorage.setItem(SETUP_KEY,JSON.stringify(data)); } catch {} };
+const clearSetupDraft = () => { try { localStorage.removeItem(SETUP_KEY); } catch {} };
+/* Lokasyon atama (mk_ozet) draft — vasItems + mkLokasyonlar */
+const LOK_KEY = id => `depoKontrol:malKabul:lok:${id}`;
+const readLokDraft  = id => { try { const r=localStorage.getItem(LOK_KEY(id)); return r?JSON.parse(r):null; } catch { return null; } };
+const writeLokDraft = (id,data) => { try { localStorage.setItem(LOK_KEY(id),JSON.stringify(data)); } catch {} };
+const clearLokDraft = id => { try { localStorage.removeItem(LOK_KEY(id)); } catch {} };
+
 function Toast({ msg, type, onDone }) {
-  const bg = { success:'#10b981', error:'#ef4444', warning:'#f59e0b', info:'#3b82f6' };
-  useEffect(() => { const t = setTimeout(onDone, 3500); return () => clearTimeout(t); }, [onDone]);
-  return (
-    <div style={{ position:'fixed', bottom:24, left:'50%', transform:'translateX(-50%)',
-      background:bg[type]||'#3b82f6', color:'#fff', padding:'10px 20px', borderRadius:12,
-      fontWeight:600, fontSize:14, zIndex:9999, boxShadow:'0 4px 12px rgba(0,0,0,.2)' }}>
-      {msg}
-    </div>
-  );
+  const bg={success:'#10b981',error:'#ef4444',warning:'#f59e0b',info:'#3b82f6'};
+  useEffect(()=>{const t=setTimeout(onDone,3500);return()=>clearTimeout(t);},[onDone]);
+  return <div style={{position:'fixed',top:16,left:'50%',transform:'translateX(-50%)',background:bg[type]||'#334155',color:'#fff',padding:'10px 20px',borderRadius:16,fontSize:13,fontWeight:600,zIndex:9999,maxWidth:'90vw',textAlign:'center',boxShadow:'0 4px 16px rgba(0,0,0,.2)'}}>{msg}</div>;
 }
 
-const RAF_LIMITS = {
-  '109': { start: 13, end: 117 },
-  '110': { start: 14, end: 117 }
-};
-const getRafRange = (koridor) => RAF_LIMITS[koridor] || RAF_LIMITS['109'];
-const getRafList = (koridor) => {
-  const { start, end } = getRafRange(koridor);
-  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
-};
+const RAF_LIMITS={'109':{start:13,end:117},'110':{start:14,end:117}};
+const getRafRange=k=>RAF_LIMITS[k]||RAF_LIMITS['109'];
+const getRafList=k=>{const{start,end}=getRafRange(k);return Array.from({length:end-start+1},(_,i)=>start+i);};
 
-function ProductRow({ p, isAdmin, onAdjust }) {
-  const miktar = p.miktar ?? null;
-  const kritik = miktar !== null && miktar <= 0;
-  const low = miktar !== null && miktar > 0 && miktar < 5;
-  const dotColor = kritik ? '#ef4444' : low ? '#f59e0b' : '#10b981';
-  return (
-    <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 0',
-      borderBottom:'1px solid #f1f5f9' }}>
-      <div style={{ width:8, height:8, borderRadius:'50%', background:dotColor, flexShrink:0 }} />
-      <div style={{ flex:1, minWidth:0 }}>
-        <p style={{ fontSize:13, fontWeight:600, color:'#1e293b', marginBottom:1,
-          overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-          {p.urunAdi || '—'}
-        </p>
-        <p style={{ fontSize:11, color:'#94a3b8', fontFamily:'monospace' }}>
-          {p.malzemeKodu && <span style={{ marginRight:8 }}>{p.malzemeKodu}</span>}
-          {p.ean}
-        </p>
-        {p.locations?.length > 0 && (
-          <p style={{ fontSize:11, color:'#3b82f6', marginTop:1 }}>
-            📍 {p.locations.join(' · ')}
-          </p>
-        )}
-      </div>
-      <div style={{ textAlign:'right', flexShrink:0 }}>
-        <p style={{ fontSize:16, fontWeight:700,
-          color: kritik ? '#ef4444' : low ? '#d97706' : '#1e293b' }}>
-          {miktar !== null ? miktar : '—'}
-        </p>
-        <p style={{ fontSize:10, color:'#94a3b8' }}>
-          {p.totalMiktar !== undefined && p.totalMiktar !== miktar
-            ? `toplam: ${p.totalMiktar}` : 'adet'}
-        </p>
-      </div>
-      {isAdmin && onAdjust && (
-        <button onClick={() => onAdjust(p)}
-          style={{ background:'#f1f5f9', border:'none', borderRadius:8, padding:'6px 10px',
-            fontSize:12, cursor:'pointer', color:'#64748b', flexShrink:0 }}>
-          ✏️
-        </button>
-      )}
+function LokPicker({onSelect}){
+  const[kor,setKor]=useState('109');const[raf,setRaf]=useState(null);const[kat,setKat]=useState(null);
+  const[search,setSearch]=useState('');const[camOn,setCamOn]=useState(false);
+  const videoRef=useRef(null);const streamRef=useRef(null);const detRef=useRef(null);const rafAnimRef=useRef(null);
+  const KATS=['A','B','C','D','E','F'];
+  const curLok=raf&&kat?`A${kor}S${String(raf).padStart(3,'0')}${kat}`:null;
+  const stopCam=()=>{if(rafAnimRef.current)cancelAnimationFrame(rafAnimRef.current);if(streamRef.current)streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;setCamOn(false);};
+  const scanLok=()=>{if(!videoRef.current||!detRef.current)return;detRef.current.detect(videoRef.current).then(res=>{if(res.length>0){const m=res[0].rawValue.trim().match(/^A?(109|110)S?(\d{3})([A-F])$/i);if(m){setKor(m[1]);setRaf(parseInt(m[2]));setKat(m[3].toUpperCase());stopCam();}}rafAnimRef.current=requestAnimationFrame(scanLok);}).catch(()=>{rafAnimRef.current=requestAnimationFrame(scanLok);});};
+  const startCam=async()=>{try{if(!detRef.current)detRef.current=new window.BarcodeDetector({formats:['code_128','code_39','qr_code','ean_13']});const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});streamRef.current=stream;if(videoRef.current){videoRef.current.srcObject=stream;await videoRef.current.play();}setCamOn(true);rafAnimRef.current=requestAnimationFrame(scanLok);}catch{alert('Kamera açılamadı');}};
+  useEffect(()=>()=>stopCam(),[]);
+  const handleSearch=val=>{setSearch(val);const m=val.trim().match(/^A?(109|110)S?(\d{2,3})([A-F])$/i);if(m){setKor(m[1]);setRaf(parseInt(m[2]));setKat(m[3].toUpperCase());}};
+  return(<div style={{padding:14}}>
+    <div style={{display:'flex',gap:8,marginBottom:12}}>
+      <input value={search} onChange={e=>handleSearch(e.target.value)} placeholder="Kod yaz (A109S013B)" style={{flex:1,padding:'9px 12px',border:'1px solid #e2e8f0',borderRadius:10,fontSize:13,outline:'none'}}/>
+      <button onClick={()=>camOn?stopCam():startCam()} style={{background:camOn?'#ef4444':'#1e40af',border:'none',borderRadius:10,color:'#fff',padding:'9px 14px',fontSize:13,fontWeight:600,cursor:'pointer'}}>{camOn?'⏹':'📷 Tara'}</button>
     </div>
-  );
+    {camOn&&<div style={{marginBottom:10,borderRadius:10,overflow:'hidden',background:'#000',maxHeight:160}}><video ref={videoRef} style={{width:'100%',maxHeight:160,objectFit:'cover'}} playsInline muted/></div>}
+    <button onClick={()=>onSelect('HVZ')} style={{width:'100%',background:'#fff7ed',border:'1px solid #fed7aa',borderRadius:10,padding:'9px 0',fontSize:13,fontWeight:700,cursor:'pointer',color:'#c2410c',marginBottom:12}}>📦 HVZ — Havuz (Lokasyonsuz)</button>
+    <p style={{fontSize:11,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>Koridor</p>
+    <div style={{display:'flex',gap:8,marginBottom:12}}>{['109','110'].map(k=><button key={k} onClick={()=>{setKor(k);setRaf(null);setKat(null);}} style={{flex:1,border:'none',borderRadius:10,padding:'9px 0',fontSize:14,fontWeight:600,cursor:'pointer',background:kor===k?'#1e40af':'#f1f5f9',color:kor===k?'#fff':'#475569'}}>{k}</button>)}</div>
+    <p style={{fontSize:11,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>Raf {raf?`— ${raf}`:''}</p>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(8,1fr)',gap:4,maxHeight:140,overflowY:'auto',marginBottom:12}}>{getRafList(kor).map(n=><button key={n} onClick={()=>{setRaf(n);setKat(null);}} style={{padding:'5px 0',border:'none',borderRadius:5,fontSize:11,fontWeight:600,cursor:'pointer',background:raf===n?'#1e40af':'#f1f5f9',color:raf===n?'#fff':'#475569'}}>{n}</button>)}</div>
+    {raf&&<><p style={{fontSize:11,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>Kat</p><div style={{display:'flex',gap:6,marginBottom:12}}>{KATS.map(k=><button key={k} onClick={()=>setKat(k)} style={{flex:1,border:'none',borderRadius:8,padding:'9px 0',fontSize:14,fontWeight:600,cursor:'pointer',background:kat===k?'#1e40af':'#f1f5f9',color:kat===k?'#fff':'#475569'}}>{k}</button>)}</div></>}
+    {curLok&&<button onClick={()=>onSelect(curLok)} style={{width:'100%',background:'#1e40af',border:'none',borderRadius:12,padding:'12px 0',fontSize:14,fontWeight:700,cursor:'pointer',color:'#fff'}}>📍 {curLok} — Seç →</button>}
+  </div>);
 }
 
-export default function Stok() {
-  const { user, profile } = useAuth();
-  const { selectedDepo, depoInfo } = useDepo();
-  const isAdmin = profile?.role === 'admin';
-
-  const TABS = isAdmin
-    ? ['Raf Görünümü', 'Ürün Ara', 'Hareketler', 'Yönet']
-    : ['Raf Görünümü', 'Ürün Ara', 'Hareketler'];
-
-  const [tab, setTab] = useState('Raf Görünümü');
-  const [toast, setToast] = useState(null);
-  const toast$ = (msg, type = 'info') => setToast({ msg, type, id: Date.now() });
-
-  /* ── Stats ── */
-  const [stats, setStats] = useState({ cesit: 0, adet: 0 });
-  const loadStats = useCallback(async () => {
-    try {
-      const snap = await getDocs(collection(db, 'stock'));
-      let adet = 0;
-      snap.docs.forEach(d => {
-        adet += d.data().miktar || 0;
-      });
-      setStats({ cesit: snap.size, adet });
-    } catch {}
-  }, []);
-  useEffect(() => { loadStats(); }, [loadStats]);
-
-  /* ── Export ── */
-  const exportStok = async () => {
-    try {
-      toast$('Stok dışa aktarılıyor...', 'info');
-      const [stockSnap, prodSnap] = await Promise.all([
-        getDocs(collection(db, 'stock')),
-        getDocs(collection(db, 'products')),
-      ]);
-      const prodMap = {};
-      prodSnap.docs.forEach(d => { const p = d.data(); if (p.ean) prodMap[p.ean] = p; });
-      const stockData = stockSnap.docs
-        .map(d => ({ ean: d.id, ...d.data() }))
-        .sort((a, b) => (a.urunAdi || '').localeCompare(b.urunAdi || ''));
-
-      // Sayfa 1: Özet
-      const ozet = [['EAN Kodu', 'Malzeme Kodu', 'Ürün Adı', 'Toplam Miktar']];
-      stockData.forEach(s => {
-        const p = prodMap[s.ean] || {};
-        ozet.push([s.ean || '', s.malzemeKodu || p.malzemeKodu || '',
-          s.urunAdi || p.urunAdi || '', s.miktar || 0]);
-      });
-
-      // Sayfa 2: Lokasyon Detay
-      const lokDetay = [['EAN Kodu', 'Malzeme Kodu', 'Ürün Adı', 'Lokasyon', 'Miktar']];
-      stockData.forEach(s => {
-        const p = prodMap[s.ean] || {};
-        const byLok = s.byLocation || {};
-        if (Object.keys(byLok).length > 0) {
-          Object.entries(byLok).forEach(([lok, m]) => {
-            if (m !== 0) lokDetay.push([s.ean || '', s.malzemeKodu || p.malzemeKodu || '',
-              s.urunAdi || p.urunAdi || '', lok, m]);
-          });
-        } else {
-          lokDetay.push([s.ean || '', s.malzemeKodu || p.malzemeKodu || '',
-            s.urunAdi || p.urunAdi || '', '', s.miktar || 0]);
-        }
-      });
-
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ozet), 'Stok Özet');
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lokDetay), 'Lokasyon Detay');
-      XLSX.writeFile(wb, `stok_${new Date().toISOString().slice(0, 10)}.xlsx`);
-      toast$('Stok Excel indirildi ✓', 'success');
-    } catch (e) { toast$('Hata: ' + e.message, 'error'); }
-  };
-
-  /* ── RAF GÖRÜNÜMÜ ── */
-  const [koridor, setKoridor] = useState('109');
-  const [raf, setRaf] = useState(null);
-  const [kat, setKat] = useState(null);
-  const [rafProds, setRafProds] = useState([]);
-  const [rafLoading, setRafLoading] = useState(false);
-  const [hvzMode, setHvzMode] = useState(false);
-  const [hvzProds, setHvzProds] = useState([]);
-  const [hvzLoading, setHvzLoading] = useState(false);
-  const [hvzTransfer, setHvzTransfer] = useState(null); // {ean,urunAdi,malzemeKodu,miktar}
-  const [hvzTargetLok, setHvzTargetLok] = useState('');
-  const [hvzTransferAdet, setHvzTransferAdet] = useState('');
-
-  const rafKod = raf && kat ? `A${koridor}S${String(raf).padStart(3,'0')}${kat}` : null;
-
-  const loadHvz = useCallback(async () => {
-    setHvzLoading(true);
-    try {
-      const snap = await getDocs(isMainDepo(selectedDepo)?collection(db,'stock'):query(collection(db,'stock'),where('depoId','==',selectedDepo)));
-      const items = snap.docs
-        .map(d => ({ ean:d.id, ...d.data() }))
-        .filter(s => (s.byLocation?.HVZ ?? 0) > 0)
-        .map(s => ({ ean:s.ean, urunAdi:s.urunAdi||'', malzemeKodu:s.malzemeKodu||'', miktar:s.byLocation.HVZ, totalMiktar:s.miktar||0 }));
-      setHvzProds(items.sort((a,b) => (a.urunAdi||'').localeCompare(b.urunAdi||'')));
-    } catch (e) { toast$('Hata: '+e.message,'error'); }
-    setHvzLoading(false);
-  }, []);
-
-  /* HVZ → gerçek lokasyona taşı */
-  const hvzLokasyonaTasi = async () => {
-    if (!hvzTransfer) return;
-    const hedef = hvzTargetLok.trim().toUpperCase();
-    const adet = parseInt(hvzTransferAdet) || 0;
-    if (!hedef) { toast$('Hedef lokasyon girin', 'error'); return; }
-    if (hedef === 'HVZ') { toast$('Hedef HVZ olamaz', 'error'); return; }
-    if (adet <= 0 || adet > hvzTransfer.miktar) { toast$(`Geçerli adet girin (1-${hvzTransfer.miktar})`, 'error'); return; }
-    try {
-      const now = Timestamp.now();
-      const sRef = doc(db,'stock',hvzTransfer.ean);
-      const sSnap = await getDoc(sRef);
-      const data = sSnap.exists() ? sSnap.data() : { byLocation:{}, miktar:0 };
-      const byLok = { ...(data.byLocation||{}) };
-      byLok.HVZ = (byLok.HVZ||0) - adet;
-      if (byLok.HVZ <= 0) delete byLok.HVZ;
-      byLok[hedef] = (byLok[hedef]||0) + adet;
-      await setDoc(sRef, { byLocation: byLok, sonGuncelleme: now }, { merge:true });
-      // products.locations'a hedefi ekle (yeni lokasyonsa görünür olsun)
-      try {
-        const pSnap = await getDocs(query(collection(db,'products'), where('ean','==',hvzTransfer.ean)));
-        if (!pSnap.empty) {
-          const pdoc = pSnap.docs[0];
-          const locs = pdoc.data().locations || [];
-          if (!locs.includes(hedef)) await updateDoc(doc(db,'products',pdoc.id), { locations:[...locs.filter(l=>l!=='BELIRLENECEK'), hedef] });
-        }
-      } catch {}
-      await addDoc(collection(db,'stockMovements'), {
-        tarih:now, tip:'hvz_transfer', ean:hvzTransfer.ean,
-        malzemeKodu:hvzTransfer.malzemeKodu||'', urunAdi:hvzTransfer.urunAdi||'',
-        miktar:adet, lokasyon:hedef, kaynakLokasyon:'HVZ',
-        kaynak:'hvz_transfer', yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
-      });
-      toast$(`${adet} adet ${hedef} lokasyonuna taşındı ✓`, 'success');
-      setHvzTransfer(null); setHvzTargetLok(''); setHvzTransferAdet('');
-      loadHvz();
-    } catch (e) { toast$('Hata: '+e.message, 'error'); }
-  };
-
-  const loadRaf = useCallback(async () => {
-    if (!rafKod) return;
-    setRafLoading(true);
-    try {
-      const snap = await getDocs(query(collection(db,'products'),
-        where('locations','array-contains', rafKod)));
-      const prods = snap.docs.map(d => ({ id:d.id, ...d.data() }));
-      const withStock = await Promise.all(prods.map(async p => {
-        if (!p.ean) return { ...p, miktar:null, totalMiktar:null };
-        const s = await getDoc(doc(db,'stock',stokDocId(selectedDepo,p.ean)));
-        if (!s.exists()) return { ...p, miktar:null, totalMiktar:null };
-        const data = s.data();
-        const lokMiktar = data.byLocation?.[rafKod] ?? null;
-        const totalMiktar = data.miktar ?? null;
-        return { ...p, miktar: lokMiktar !== null ? lokMiktar : totalMiktar, totalMiktar };
-      }));
-      setRafProds(withStock.sort((a,b) => (a.urunAdi||'').localeCompare(b.urunAdi||'')));
-    } catch (e) { toast$('Hata: '+e.message,'error'); }
-    setRafLoading(false);
-  }, [rafKod]);
-
-  useEffect(() => { if (rafKod) loadRaf(); }, [rafKod, loadRaf]);
-
-  /* ── ÜRÜN ARA ── */
-  const [searchQ, setSearchQ] = useState('');
-  const [searchRes, setSearchRes] = useState([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const searchTimer = useRef(null);
-  const [searchCamOn, setSearchCamOn] = useState(false);
-  const [searchCamMsg, setSearchCamMsg] = useState('');
-  const searchVideoRef = useRef(null);
-  const searchStreamRef = useRef(null);
-  const searchDetectorRef = useRef(null);
-  const searchRafRef = useRef(null);
-  const searchLastRef = useRef({ code:'', emptySince:0 });
-
-  const stopSearchCam = useCallback(() => {
-    if (searchRafRef.current) cancelAnimationFrame(searchRafRef.current);
-    searchRafRef.current = null;
-    if (searchStreamRef.current) searchStreamRef.current.getTracks().forEach(t => t.stop());
-    searchStreamRef.current = null;
-    if (searchVideoRef.current) searchVideoRef.current.srcObject = null;
-    searchLastRef.current = { code:'', emptySince:0 };
-    setSearchCamMsg('');
-    setSearchCamOn(false);
-  }, []);
-
-  const scanSearchBarcode = useCallback(() => {
-    if (!searchVideoRef.current || !searchDetectorRef.current) return;
-    if (searchVideoRef.current.readyState < 2) {
-      searchRafRef.current = requestAnimationFrame(scanSearchBarcode);
-      return;
-    }
-    searchDetectorRef.current.detect(searchVideoRef.current).then(res => {
-      const now = Date.now();
-      if (!res.length) {
-        const last = searchLastRef.current;
-        searchLastRef.current = { ...last, emptySince: last.emptySince || now };
-        if (now - searchLastRef.current.emptySince > 900) {
-          searchLastRef.current = { code:'', emptySince: searchLastRef.current.emptySince };
-        }
-      } else {
-        const code = String(res[0].rawValue || '').trim();
-        searchLastRef.current.emptySince = 0;
-        if (code && code !== searchLastRef.current.code) {
-          searchLastRef.current = { code, emptySince:0 };
-          setSearchQ(code);
-          toast$('Barkod okundu: ' + code, 'success');
-          stopSearchCam();
-          return;
-        }
-      }
-      searchRafRef.current = requestAnimationFrame(scanSearchBarcode);
-    }).catch(() => {
-      searchRafRef.current = requestAnimationFrame(scanSearchBarcode);
-    });
-  }, [stopSearchCam]);
-
-  const startSearchCam = useCallback(async () => {
-    try {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        toast$('Bu cihazda kamera erişimi desteklenmiyor', 'warning'); return;
-      }
-      if (!('BarcodeDetector' in window)) {
-        toast$('Bu tarayıcı barkod taramayı desteklemiyor.', 'warning'); return;
-      }
-      if (!searchDetectorRef.current) {
-        searchDetectorRef.current = new window.BarcodeDetector({
-          formats:['ean_13','ean_8','code_128','code_39','upc_a','upc_e','qr_code'] });
-      }
-      setSearchCamOn(true);
-      setSearchCamMsg('Kamera açılıyor...');
-      await new Promise(resolve => setTimeout(resolve, 120));
-      let stream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio:false,
-          video:{ facingMode:{ ideal:'environment' }, width:{ ideal:1280 }, height:{ ideal:720 } }
-        });
-      } catch {
-        stream = await navigator.mediaDevices.getUserMedia({ audio:false, video:true });
-      }
-      searchStreamRef.current = stream;
-      if (!searchVideoRef.current) throw new Error('Video alanı hazırlanamadı');
-      const video = searchVideoRef.current;
-      video.srcObject = stream; video.muted = true;
-      video.setAttribute('playsinline','true'); video.setAttribute('webkit-playsinline','true');
-      await new Promise(resolve => { video.onloadedmetadata = resolve; setTimeout(resolve, 900); });
-      await video.play();
-      setSearchCamMsg('Barkodu kameraya gösterin');
-      searchRafRef.current = requestAnimationFrame(scanSearchBarcode);
-    } catch (e) {
-      toast$('Kamera açılamadı: ' + e.message, 'error');
-      stopSearchCam();
-    }
-  }, [scanSearchBarcode, stopSearchCam]);
-
-  useEffect(() => () => stopSearchCam(), [stopSearchCam]);
-
-  useEffect(() => {
-    clearTimeout(searchTimer.current);
-    if (searchQ.length < 2) { setSearchRes([]); return; }
-    searchTimer.current = setTimeout(async () => {
-      setSearchLoading(true);
-      try {
-        const snap = await getDocs(collection(db,'products'));
-        const q = searchQ.toLowerCase();
-        const matched = snap.docs.map(d => ({id:d.id,...d.data()}))
-          .filter(p => (p.ean&&p.ean.includes(searchQ)) ||
-            (p.malzemeKodu&&p.malzemeKodu.toLowerCase().includes(q)) ||
-            (p.urunAdi&&p.urunAdi.toLowerCase().includes(q)))
-          .slice(0,40);
-        const withStock = await Promise.all(matched.map(async p => {
-          if (!p.ean) return {...p,miktar:null};
-          const s = await getDoc(doc(db,'stock',stokDocId(selectedDepo,p.ean)));
-          return {...p, miktar: s.exists()?(s.data().miktar??null):null};
-        }));
-        setSearchRes(withStock);
-      } catch {}
-      setSearchLoading(false);
-    }, 400);
-  }, [searchQ]);
-
-
-
-  /* ── HAREKETLER ── */
-  const [hareketler, setHareketler] = useState([]);
-  const [hareketLoading, setHareketLoading] = useState(false);
-
-  const loadHareketler = useCallback(async () => {
-    setHareketLoading(true);
-    try {
-      const snap = await getDocs(query(collection(db,'stockMovements'),
-        orderBy('tarih','desc'), limit(100)));
-      setHareketler(snap.docs.map(d => ({id:d.id,...d.data()})));
-    } catch {}
-    setHareketLoading(false);
-  }, []);
-
-  useEffect(() => { if (tab==='Hareketler') loadHareketler(); }, [tab, loadHareketler]);
-
-  /* ── YÖNETİM: KÖK STOK ── */
-  const [impLoading, setImpLoading] = useState(false);
-
-  const importKokStok = async (file) => {
-    if (!window.confirm('⚠️ Bu işlem TÜM stok verilerini sıfırlayıp yeni veriyi yazar. Emin misiniz?')) return;
-    setImpLoading(true);
-    try {
-      const reader = new FileReader();
-      reader.onload = async ({ target: { result } }) => {
-        try {
-          const wb = XLSX.read(new Uint8Array(result), { type:'array' });
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
-          let hIdx=0, cEan=-1, cCode=-1, cMiktar=-1, cUrun=-1;
-          for (let r=0; r<Math.min(rows.length,10); r++) {
-            const cells = rows[r].map(c=>String(c||'').toLowerCase().replace(/\s+/g,' ').trim());
-            let score=0;
-            cells.forEach((cell,j) => {
-              if (/ean|barkod|barcode/.test(cell) && cEan<0) { cEan=j; score++; }
-              if (/(malzeme|stok|item)\s*(kodu?|code?)/.test(cell) && cCode<0) { cCode=j; score++; }
-              if (/miktar|adet|qty|quantity|kullan/.test(cell) && cMiktar<0) { cMiktar=j; score++; }
-              if (/açıklama|aciklama|ürün ad|description/.test(cell) && cUrun<0) cUrun=j;
-            });
-            if (score>=2) { hIdx=r; break; }
-          }
-          if (cMiktar<0 && rows[hIdx]?.length>0) cMiktar=rows[hIdx].length-1;
-          if (cMiktar<0) { toast$('Miktar sütunu bulunamadı','error'); setImpLoading(false); return; }
-
-          const existing = await getDocs(isMainDepo(selectedDepo)?collection(db,'stock'):query(collection(db,'stock'),where('depoId','==',selectedDepo)));
-          const delBatch = writeBatch(db);
-          existing.docs.forEach(d => delBatch.delete(d.ref));
-          await delBatch.commit();
-
-          const now = Timestamp.now();
-          let count=0;
-          const movBatch = writeBatch(db);
-          const stockBatch = writeBatch(db);
-          let cLok = -1;
-          if (rows[hIdx]) {
-            rows[hIdx].map(c=>String(c||'').toLowerCase().trim()).forEach((cell,j) => {
-              if (/lokasyon|location/.test(cell) && cLok<0) cLok=j;
-            });
-          }
-          const eanDataMap = {};
-          rows.slice(hIdx+1).forEach(row => {
-            const ean = String(row[cEan]||'').trim();
-            const miktar = parseInt(String(row[cMiktar]||'0').replace(/\D/g,''),10)||0;
-            if (!ean || !miktar) return;
-            const urunAdi = cUrun>=0?String(row[cUrun]||'').trim():'';
-            const malzemeKodu = cCode>=0?String(row[cCode]||'').trim():'';
-            const lokasyon = cLok>=0?String(row[cLok]||'').trim():'';
-            if (!eanDataMap[ean]) eanDataMap[ean] = { ean, urunAdi, malzemeKodu, miktar:0, byLocation:{} };
-            eanDataMap[ean].miktar += miktar;
-            if (lokasyon) eanDataMap[ean].byLocation[lokasyon] = (eanDataMap[ean].byLocation[lokasyon]||0)+miktar;
-          });
-
-          Object.values(eanDataMap).forEach(item => {
-            stockBatch.set(doc(db,'stock',stokDocId(selectedDepo,item.ean)), {
-              ean:item.ean, miktar:item.miktar, urunAdi:item.urunAdi,
-              malzemeKodu:item.malzemeKodu, byLocation:item.byLocation, sonGuncelleme:now
-            });
-            movBatch.set(doc(collection(db,'stockMovements')), {
-              tarih:now, tip:'kök_stok', ean:item.ean, malzemeKodu:item.malzemeKodu,
-              urunAdi:item.urunAdi, miktar:item.miktar, oncekiMiktar:0, sonrakiMiktar:item.miktar,
-              kaynak:'excel_kök_stok', yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
-            });
-            count++;
-          });
-          await stockBatch.commit();
-          await movBatch.commit();
-          toast$(`${count} ürün kök stok olarak yüklendi ✓`,'success');
-          loadStats();
-        } catch(e) { toast$('Hata: '+e.message,'error'); }
-        setImpLoading(false);
-      };
-      reader.readAsArrayBuffer(file);
-    } catch { setImpLoading(false); }
-  };
-
-  /* ── SEVKİYAT EXCEL ── */
-  const [sevkiyatPreview, setSevkiyatPreview] = useState(null);
-
-  const importSevkiyat = async (file) => {
-    setImpLoading(true);
-    try {
-      const reader = new FileReader();
-      reader.onload = async ({ target: { result } }) => {
-        try {
-          const wb = XLSX.read(new Uint8Array(result), { type:'array' });
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
-          let hIdx=0, cEan=-1, cCode=-1, cMiktar=-1, cUrun=-1;
-          for (let r=0; r<Math.min(rows.length,10); r++) {
-            const cells = rows[r].map(c=>String(c||'').toLowerCase().replace(/\s+/g,' ').trim());
-            let score=0;
-            cells.forEach((cell,j) => {
-              if (/ean|barkod|barcode/.test(cell) && cEan<0) { cEan=j; score++; }
-              if (/(malzeme|stok|item)\s*(kodu?|code?)/.test(cell) && cCode<0) { cCode=j; score++; }
-              if (/miktar|adet|qty|quantity|kullan/.test(cell) && cMiktar<0) { cMiktar=j; score++; }
-              if (/açıklama|aciklama|ürün ad|description/.test(cell) && cUrun<0) cUrun=j;
-            });
-            if (score>=2) { hIdx=r; break; }
-          }
-          if (cMiktar<0 && rows[hIdx]?.length>0) cMiktar=rows[hIdx].length-1;
-          if (cMiktar<0) { toast$('Miktar sütunu bulunamadı','error'); setImpLoading(false); return; }
-
-          // EAN lookup
-          const prodSnap = await getDocs(collection(db,'products'));
-          const eanByCode = {};
-          prodSnap.docs.forEach(d => {
-            const p = d.data();
-            if (p.malzemeKodu) eanByCode[p.malzemeKodu] = p;
-            if (p.ean) eanByCode[p.ean] = p;
-          });
-          const stockSnap = await getDocs(isMainDepo(selectedDepo)?collection(db,'stock'):query(collection(db,'stock'),where('depoId','==',selectedDepo)));
-          const stockMap = {};
-          stockSnap.docs.forEach(d => { stockMap[d.id] = d.data(); });
-
-          const currentStock = {};
-          const previewItems = [];
-          rows.slice(hIdx+1).forEach(row => {
-            const rawEan = cEan>=0?String(row[cEan]||'').trim():'';
-            const rawCode = cCode>=0?String(row[cCode]||'').trim():'';
-            const miktar = parseInt(String(row[cMiktar]||'0').replace(/\D/g,''),10)||0;
-            if (miktar<=0) return;
-            const prod = eanByCode[rawEan]||eanByCode[rawCode]||{};
-            const ean = prod.ean||rawEan;
-            if (!ean) return;
-            currentStock[ean] = (currentStock[ean]||0)+miktar;
-            const urunAdi = cUrun>=0?String(row[cUrun]||'').trim():prod.urunAdi||'';
-            const malzemeKodu = rawCode||prod.malzemeKodu||'';
-            previewItems.push({ ean, malzemeKodu, urunAdi, miktar });
-          });
-
-          setSevkiyatPreview({ items: previewItems, lokasyonlar: {} });
-          toast$(`${previewItems.length} ürün bulundu — lokasyon girin`, 'info');
-        } catch(e) { toast$('Hata: '+e.message,'error'); }
-        setImpLoading(false);
-      };
-      reader.readAsArrayBuffer(file);
-    } catch { setImpLoading(false); }
-  };
-
-  const saveSevkiyatWithLok = async () => {
-    if (!sevkiyatPreview) return;
-    const { items, lokasyonlar } = sevkiyatPreview;
-    const missingLok = items.find(i => !lokasyonlar[i.ean]);
-    if (missingLok) { toast$(`${missingLok.urunAdi||missingLok.ean} için lokasyon giriniz`, 'error'); return; }
-    setImpLoading(true);
-    try {
-      const now = Timestamp.now();
-      const stockSnap = await getDocs(isMainDepo(selectedDepo)?collection(db,'stock'):query(collection(db,'stock'),where('depoId','==',selectedDepo)));
-      const stockMap = {};
-      stockSnap.docs.forEach(d => { stockMap[d.id] = d.data(); });
-      const batch = writeBatch(db);
-      const movBatch = writeBatch(db);
-      items.forEach(item => {
-        const prev = stockMap[item.ean]?.miktar || 0;
-        const next = prev + item.miktar;
-        const lok = lokasyonlar[item.ean];
-        const prevByLok = stockMap[item.ean]?.byLocation || {};
-        const newByLok = { ...prevByLok, [lok]: (prevByLok[lok]||0) + item.miktar };
-        batch.set(doc(db,'stock',stokDocId(selectedDepo,item.ean)), {
-          ean:item.ean, miktar:next, urunAdi:item.urunAdi||'',
-          malzemeKodu:item.malzemeKodu||'', byLocation:newByLok, sonGuncelleme:now
-        }, {merge:true});
-        movBatch.set(doc(collection(db,'stockMovements')), {
-          tarih:now, tip:'sevkiyat_excel', ean:item.ean,
-          malzemeKodu:item.malzemeKodu||'', urunAdi:item.urunAdi||'',
-          miktar:item.miktar, oncekiMiktar:prev, sonrakiMiktar:next,
-          lokasyon:lok, kaynak:'sevkiyat_excel',
-          yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
-        });
-      });
-      await batch.commit();
-      await movBatch.commit();
-      setSevkiyatPreview(null);
-      toast$(`${items.length} ürün lokasyonlarıyla stoğa eklendi ✓`, 'success');
-      loadStats();
-    } catch(e) { toast$('Hata: '+e.message, 'error'); }
-    setImpLoading(false);
-  };
-
-  /* ── YÖNETİM: MANUEL GİRİŞ ── */
-  const [manualQuery, setManualQuery] = useState('');
-  const [manualProd, setManualProd] = useState(null);
-  const [manualMiktar, setManualMiktar] = useState('');
-  const [manualLok, setManualLok] = useState('');
-  const [manualTip, setManualTip] = useState('giris');
-  const [manualLoading, setManualLoading] = useState(false);
-  const [lokKoridor, setLokKoridor] = useState('109');
-  const [lokRaf, setLokRaf] = useState(null);
-  const [lokKat, setLokKat] = useState(null);
-  const [showLokPicker, setShowLokPicker] = useState(false);
-
-  const lookupManual = async (q) => {
-    if (q.length < 3) { setManualProd(null); return; }
-    try {
-      const snap = await getDocs(collection(db,'products'));
-      const ql = q.toLowerCase();
-      const found = snap.docs.map(d=>({id:d.id,...d.data()}))
-        .find(p => (p.ean&&p.ean===q) || (p.malzemeKodu&&p.malzemeKodu.toLowerCase()===ql));
-      if (found) {
-        const s = await getDoc(doc(db,'stock',found.ean||''));
-        const stockData = s.exists() ? s.data() : {};
-        setManualProd({...found, currentMiktar: stockData.miktar||0, byLocation: stockData.byLocation||{}});
-      } else { setManualProd(null); }
-    } catch {}
-  };
-
-  const addManualStock = async () => {
-    if (!manualProd || !manualMiktar) return;
-    const miktar = parseInt(manualMiktar)||0;
-    if (miktar===0) { toast$('Geçerli bir miktar girin','error'); return; }
-    if (!manualLok.trim()) { toast$('Lokasyon seçiniz','error'); return; }
-    const lok = manualLok.trim().toUpperCase();
-    const prevByLok = manualProd.byLocation || {};
-    const prevLokMiktar = prevByLok[lok] || 0;
-    if (manualTip==='cikis' && prevLokMiktar < miktar) {
-      toast$(`⛔ ${lok} lokasyonunda yalnızca ${prevLokMiktar} adet var. Çıkış yapılamaz.`, 'error');
-      return;
-    }
-    if (manualTip==='cikis' && (manualProd.currentMiktar||0) < miktar) {
-      toast$(`⛔ Toplam stok yetersiz (${manualProd.currentMiktar} adet). Çıkış yapılamaz.`, 'error');
-      return;
-    }
-    setManualLoading(true);
-    try {
-      const now = Timestamp.now();
-      const prev = manualProd.currentMiktar||0;
-      const isGiris = manualTip === 'giris';
-      const delta = isGiris ? miktar : -miktar;
-      const next = prev + delta;
-      const newLokMiktar = prevLokMiktar + delta;
-      const newByLok = { ...prevByLok, [lok]: newLokMiktar };
-      await setDoc(doc(db,'stock',manualProd.ean), {
-        ean:manualProd.ean, miktar:next,
-        urunAdi:manualProd.urunAdi||'', malzemeKodu:manualProd.malzemeKodu||'',
-        byLocation:newByLok, sonGuncelleme:now
-      }, {merge:true});
-      await addDoc(collection(db,'stockMovements'), {
-        tarih:now, tip: isGiris ? 'sevkiyat_manuel' : 'cikis_manuel',
-        ean:manualProd.ean, malzemeKodu:manualProd.malzemeKodu||'', urunAdi:manualProd.urunAdi||'',
-        miktar:delta, oncekiMiktar:prev, sonrakiMiktar:next,
-        lokasyon:lok, kaynak:'manuel',
-        yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
-      });
-      toast$(`${isGiris?'Giriş':'Çıkış'}: ${manualProd.urunAdi||manualProd.ean} ${prev} → ${next} ✓`,'success');
-      setManualProd({...manualProd, currentMiktar:next, byLocation:newByLok});
-      setManualMiktar('');
-      loadStats();
-    } catch(e) { toast$('Hata: '+e.message,'error'); }
-    setManualLoading(false);
-  };
-
-  /* ── ADJUST ── */
-  const [adjustProd, setAdjustProd] = useState(null);
-  const [adjustMiktar, setAdjustMiktar] = useState('');
-
-  const saveAdjust = async () => {
-    if (!adjustProd) return;
-    const yeni = parseInt(adjustMiktar);
-    if (isNaN(yeni)) { toast$('Geçerli miktar girin','error'); return; }
-    try {
-      const now = Timestamp.now();
-      const prev = adjustProd.miktar||0;
-      // byLocation içindeki negatif kayıtları temizle
-      const stockSnap = await getDoc(doc(db,'stock',adjustProd.ean));
-      const byLok = stockSnap.exists() ? (stockSnap.data().byLocation||{}) : {};
-      const cleanByLok = Object.fromEntries(
-        Object.entries(byLok).filter(([,m]) => m > 0)
-      );
-      await setDoc(doc(db,'stock',adjustProd.ean), {
-        ean:adjustProd.ean, miktar:yeni,
-        byLocation: cleanByLok,
-        sonGuncelleme:now
-      }, {merge:true});
-      await addDoc(collection(db,'stockMovements'), {
-        tarih:now, tip:'duzeltme', ean:adjustProd.ean,
-        malzemeKodu:adjustProd.malzemeKodu||'', urunAdi:adjustProd.urunAdi||'',
-        miktar:yeni-prev, oncekiMiktar:prev, sonrakiMiktar:yeni,
-        kaynak:'manuel_duzeltme', yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
-      });
-      toast$('Stok düzeltildi — negatif lokasyonlar temizlendi ✓','success');
-      setAdjustProd(null);
-      if (tab==='Raf Görünümü') loadRaf();
-      loadStats();
-    } catch(e) { toast$('Hata: '+e.message,'error'); }
-  };
-
-  /* ── RENDER ── */
-  const S = {
-    page:{ padding:'16px', maxWidth:700, margin:'0 auto' },
-    tab:{ border:'none', background:'none', padding:'8px 14px', fontSize:13,
-      fontWeight:600, cursor:'pointer', borderRadius:8, transition:'all .15s' },
-    card:{ background:'#fff', borderRadius:14, padding:'16px', border:'1px solid #e2e8f0', marginBottom:12 },
-    btn:{ border:'none', borderRadius:10, padding:'10px 16px', fontSize:13, fontWeight:600, cursor:'pointer' },
-    input:{ width:'100%', padding:'10px 14px', borderRadius:10, border:'1px solid #e2e8f0',
-      fontSize:14, outline:'none', boxSizing:'border-box' },
-  };
-
-  const tipLabel = { kök_stok:'📥 Kök Stok', sevkiyat_excel:'📦 Sevkiyat', sevkiyat_manuel:'✍️ Manuel',
-    cikis_manuel:'📤 Çıkış', irsaliye_cikis:'📤 İrsaliye', duzeltme:'✏️ Düzeltme',
-    mal_kabul:'📥 Mal Kabul', vas_lokasyon:'🏷️ VAS' };
-  const tipColor = { kök_stok:'#3b82f6', sevkiyat_excel:'#10b981', sevkiyat_manuel:'#8b5cf6',
-    cikis_manuel:'#ef4444', irsaliye_cikis:'#f59e0b', duzeltme:'#64748b',
-    mal_kabul:'#10b981', vas_lokasyon:'#7c3aed' };
-
-  return (
-    <div>
-      {/* Header */}
-      <div style={{ background:'#0f172a', padding:'12px 16px', display:'flex',
-        alignItems:'center', justifyContent:'space-between' }}>
-        <p style={{ color:'#fff', fontWeight:700, fontSize:16 }}>📦 Stok Yönetimi</p>
-        <div style={{ display:'flex', gap:10, alignItems:'center' }}>
-          <button onClick={exportStok}
-            style={{ background:'#10b981', border:'none', borderRadius:8, color:'#fff',
-              padding:'7px 12px', fontSize:12, fontWeight:600, cursor:'pointer' }}>
-            ⬇️ Excel
+function TamamlaModal({ stats, onConfirm, onCancel }) {
+  const toplamEksik=(stats.partial||0)-(stats.eksikCount||0);
+  const canComplete=toplamEksik===0&&(stats.pending||0)===0;
+  return(
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.6)',display:'flex',alignItems:'flex-end',justifyContent:'center',zIndex:300}}>
+      <div style={{background:'#fff',borderRadius:'20px 20px 0 0',padding:24,width:'100%',maxWidth:500}}>
+        <p style={{fontSize:17,fontWeight:700,color:'#0f172a',marginBottom:16}}>Mal Kabul Tamamla</p>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:16}}>
+          <div style={{background:'#f0fdf4',borderRadius:10,padding:'10px 12px',border:'1px solid #bbf7d0'}}>
+            <p style={{fontSize:22,fontWeight:800,color:'#16a34a'}}>{(stats.ok||0)+(stats.excess||0)}</p>
+            <p style={{fontSize:12,color:'#15803d'}}>✅ Tam / Fazla — stoğa eklenecek</p>
+          </div>
+          <div style={{background:(stats.eksikCount||0)>0?'#fefce8':'#fff7ed',borderRadius:10,padding:'10px 12px',border:`1px solid ${(stats.eksikCount||0)>0?'#fde047':'#fed7aa'}`}}>
+            <p style={{fontSize:22,fontWeight:800,color:(stats.eksikCount||0)>0?'#ca8a04':'#ea580c'}}>{stats.eksikCount||0}</p>
+            <p style={{fontSize:12,color:(stats.eksikCount||0)>0?'#a16207':'#c2410c'}}>🔒 Eksik kabul — stoğa girmeyecek</p>
+          </div>
+          {toplamEksik>0&&<div style={{background:'#fef2f2',borderRadius:10,padding:'10px 12px',border:'1px solid #fecaca',gridColumn:'1/-1'}}><p style={{fontSize:15,fontWeight:800,color:'#dc2626'}}>{toplamEksik} ürün hâlâ eksik sayılmış</p><p style={{fontSize:12,color:'#b91c1c'}}>⚠️ Sayın veya "Eksik Kapat" yapın</p></div>}
+          {(stats.pending||0)>0&&<div style={{background:'#fef2f2',borderRadius:10,padding:'10px 12px',border:'1px solid #fecaca',gridColumn:'1/-1'}}><p style={{fontSize:15,fontWeight:800,color:'#dc2626'}}>{stats.pending} ürün hiç taranmadı</p><p style={{fontSize:12,color:'#b91c1c'}}>⚠️ Sayın veya "Eksik Kapat" yapın</p></div>}
+        </div>
+        <div style={{display:'flex',gap:10}}>
+          <button onClick={onCancel} style={{flex:1,padding:13,borderRadius:12,border:'2px solid #e2e8f0',background:'#fff',color:'#64748b',fontWeight:600,cursor:'pointer',fontSize:14}}>İptal</button>
+          <button onClick={onConfirm} disabled={!canComplete} style={{flex:2,padding:13,borderRadius:12,border:'none',background:canComplete?'linear-gradient(135deg,#10b981,#059669)':'#e2e8f0',color:canComplete?'#fff':'#94a3b8',fontWeight:700,cursor:canComplete?'pointer':'not-allowed',fontSize:14}}>
+            {canComplete?'Onayla ve Tamamla ✓':'Önce Eksikleri Kapat'}
           </button>
-          <div style={{ textAlign:'center' }}>
-            <p style={{ color:'#94a3b8', fontSize:10 }}>ÇEŞİT</p>
-            <p style={{ color:'#fff', fontWeight:700, fontSize:15 }}>{stats.cesit}</p>
-          </div>
-          <div style={{ textAlign:'center' }}>
-            <p style={{ color:'#94a3b8', fontSize:10 }}>TOPLAM</p>
-            <p style={{ color:'#10b981', fontWeight:700, fontSize:15 }}>{stats.adet.toLocaleString()}</p>
-          </div>
-
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Tabs */}
-      <div style={{ display:'flex', gap:4, padding:'12px 16px', background:'#f8fafc',
-        borderBottom:'1px solid #e2e8f0', overflowX:'auto' }}>
-        {TABS.map(t => (
-          <button key={t} style={{ ...S.tab,
-            background: tab===t?'#1e40af':'transparent',
-            color: tab===t?'#fff':'#64748b' }}
-            onClick={() => setTab(t)}>{t}</button>
-        ))}
+/* ── MAL KABUL SAYIM OTURUMU ── */
+function MalKabulSayimSession({ sessionId, referenceItems, products, onDone, onBack }) {
+  const { user, profile } = useAuth();
+  const isRef = referenceItems && referenceItems.length > 0;
+
+  const items = isRef ? referenceItems.map((r,i)=>({
+    id:`r${i}`,
+    ean: String(r.ean||'').trim(),
+    malzemeKodu: String(r.malzemeKodu||'').trim(),
+    urunAdi: r.urunAdi||products[String(r.ean||'').trim()]?.urunAdi||products[String(r.malzemeKodu||'').trim()]?.urunAdi||r.malzemeKodu||'',
+    beklenen: r.beklenenAdet||0,
+  })) : [];
+
+  /* ── Kalıcı başlangıç durumu: önce localStorage, sonra Firestore backup ── */
+  const draft = readMkDraft(sessionId);
+  const [counts,     setCounts]     = useState(()=>draft?.counts||{});
+  const [hasarlilar, setHasarlilar] = useState(()=>draft?.hasarlilar||{});
+  const [vasSet,     setVasSet]     = useState(()=>new Set(draft?.vasKeys||[]));
+  const [eksikSet,   setEksikSet]   = useState(()=>new Set(draft?.eksikKeys||[]));
+
+  const [scanHistory, setScanHistory] = useState([]);
+  const [lastScan,    setLastScan]    = useState(null);
+  const [mode,        setMode]        = useState('text');
+  const [barInput,    setBarInput]    = useState('');
+  const [camOn,       setCamOn]       = useState(false);
+  const [filter,      setFilter]      = useState('all');
+  const [toast,       setToast]       = useState(null);
+  const [showHasar,   setShowHasar]   = useState(false);
+  const [showModal,   setShowModal]   = useState(false);
+  const [saving,      setSaving]      = useState(false);
+
+  /* Her state değişiminde ref'leri ANINDA güncelle */
+  const countsRef    = useRef(counts);
+  const hasarliRef   = useRef(hasarlilar);
+  const vasRef       = useRef(vasSet);
+  const eksikRef     = useRef(eksikSet);
+  const sessionIdRef = useRef(sessionId);
+  const refItemsRef  = useRef(referenceItems);
+
+  /* ── ANLIK KAYIT fonksiyonu — hem localStorage hem Firestore ── */
+  const persistNow = useCallback((c, h, v, e) => {
+    const sid = sessionIdRef.current;
+    if(!sid) return;
+    const data = {
+      counts:    c  ?? countsRef.current,
+      hasarlilar:h  ?? hasarliRef.current,
+      vasKeys:   [...(v ?? vasRef.current)],
+      eksikKeys: [...(e ?? eksikRef.current)],
+      referenceItems: refItemsRef.current,
+    };
+    writeMkDraft(sid, data);
+    /* Firestore'a da yaz (async, hata verirse önemli değil) */
+    updateDoc(doc(db,'countSessions',sid),{
+      draftCounts: data.counts,
+      draftHasarlilar: data.hasarlilar,
+      draftVasKeys: data.vasKeys,
+      draftEksikKeys: data.eksikKeys,
+      draftSavedAt: Date.now(),
+    }).catch(()=>{});
+  },[]);
+
+  /* ── Count setters: setState + ref + kayıt tek seferde ── */
+  const updateCounts = useCallback((updater) => {
+    setCounts(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      countsRef.current = next;
+      persistNow(next, null, null, null);
+      return next;
+    });
+  },[persistNow]);
+
+  const updateVasSet = useCallback((updater) => {
+    setVasSet(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      vasRef.current = next;
+      persistNow(null, null, next, null);
+      return next;
+    });
+  },[persistNow]);
+
+  const updateEksikSet = useCallback((updater) => {
+    setEksikSet(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      eksikRef.current = next;
+      persistNow(null, null, null, next);
+      return next;
+    });
+  },[persistNow]);
+
+  const updateHasarlilar = useCallback((updater) => {
+    setHasarlilar(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      hasarliRef.current = next;
+      persistNow(null, next, null, null);
+      return next;
+    });
+  },[persistNow]);
+
+  /* Page hide / beforeunload garantisi */
+  useEffect(()=>{
+    sessionIdRef.current = sessionId;
+    refItemsRef.current = referenceItems;
+  },[sessionId, referenceItems]);
+
+  useEffect(()=>{
+    const persist = () => persistNow(null, null, null, null);
+    window.addEventListener('beforeunload', persist);
+    window.addEventListener('pagehide', persist);
+    const onVis = () => { if(document.visibilityState==='hidden') persist(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      persist(); // unmount anında da kaydet
+      window.removeEventListener('beforeunload', persist);
+      window.removeEventListener('pagehide', persist);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  },[persistNow]);
+
+  /* ── Kamera ── */
+  const videoRef=useRef(null);const streamRef=useRef(null);const detRef=useRef(null);const rafRef=useRef(null);
+  const lockedBcRef=useRef('');const noBcFrameRef=useRef(0);const lastScanTsRef=useRef(0);
+  const inputRef=useRef(null);const scanFnRef=useRef(null);
+  const lastItemRef=useRef(null);
+  const toast$=useCallback((msg,type='info')=>setToast({msg,type,id:Date.now()}),[]);
+
+  const getKey = item => item?.ean||item?.malzemeKodu||'';
+
+  const findItem = useCallback(code=>{
+    const c=String(code||'').trim();if(!c)return null;
+    if(isRef) return items.find(i=>i.ean===c||i.malzemeKodu===c)||null;
+    return products[c]||null;
+  },[items,isRef,products]);
+
+  const processScan = useCallback(code=>{
+    const c=String(code||'').trim();if(!c)return;
+    const item=findItem(c);
+    if(!item){toast$(`Bilinmeyen: ${c}`,'error');setLastScan({code:c,found:false});return;}
+    const key=getKey(item);
+    // Eksik işaretini kaldır
+    updateEksikSet(prev=>{const n=new Set(prev);n.delete(key);return n;});
+    updateCounts(prev=>{
+      const n=(prev[key]||0)+1;
+      setScanHistory(h=>[...h,{key,code:c,item,previousCount:prev[key]||0}]);
+      if(isRef){
+        if(n>item.beklenen) toast$(`🔴 FAZLA: ${item.urunAdi} ${n}/${item.beklenen}`,'error');
+        else if(n===item.beklenen) toast$(`🟢 TAMAM: ${item.urunAdi}`,'success');
+        else toast$(`🟡 ${item.urunAdi}: ${n}/${item.beklenen}`,'info');
+      } else { toast$(item.urunAdi||c,'success'); }
+      setLastScan({code:c,found:true,item,n,expected:item.beklenen});
+      return {...prev,[key]:n};
+    });
+  },[findItem,isRef,toast$,updateCounts,updateEksikSet]);
+
+  useEffect(()=>{scanFnRef.current=processScan;},[processScan]);
+  // Barkod okutulunca son ürüne scroll et
+  useEffect(()=>{if(lastScan?.found&&lastItemRef.current)setTimeout(()=>lastItemRef.current?.scrollIntoView({behavior:'smooth',block:'center'}),120);},[lastScan]);
+
+  const undoLast=useCallback(()=>{
+    setScanHistory(prev=>{
+      if(!prev.length){toast$('Geri alınacak yok','warning');return prev;}
+      const last=prev[prev.length-1];
+      updateCounts(c=>({...c,[last.key]:Math.max(0,(c[last.key]||0)-1)}));
+      toast$(`↩️ Geri: ${last.item?.urunAdi||last.code}`,'info');
+      return prev.slice(0,-1);
+    });
+  },[toast$,updateCounts]);
+
+  const setManualCount=useCallback((item,val)=>{
+    const key=getKey(item);const n=Math.max(0,parseInt(String(val).replace(/\D/g,''),10)||0);
+    updateCounts(prev=>({...prev,[key]:n}));
+    if(n>=item.beklenen) updateEksikSet(prev=>{const ns=new Set(prev);ns.delete(key);return ns;});
+    setLastScan({code:key,found:true,item,n,expected:item.beklenen});
+  },[updateCounts,updateEksikSet]);
+
+  const stopCam=useCallback(()=>{
+    if(rafRef.current){cancelAnimationFrame(rafRef.current);rafRef.current=null;}
+    if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;}
+    if(videoRef.current)videoRef.current.srcObject=null;
+    lockedBcRef.current='';noBcFrameRef.current=0;setCamOn(false);
+  },[]);
+
+  const startCam=useCallback(async()=>{
+    if(streamRef.current)return;
+    if(!('BarcodeDetector' in window)){toast$('Kamera desteklenmiyor','warning');setMode('text');return;}
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}});
+      streamRef.current=stream;
+      if(videoRef.current){videoRef.current.srcObject=stream;await videoRef.current.play();}
+      detRef.current=new BarcodeDetector({formats:['ean_13','ean_8','code_128','code_39','upc_a']});
+      setCamOn(true);
+      const loop=async()=>{
+        if(videoRef.current?.readyState>=2&&detRef.current){
+          const MISS_FRAMES=12;       // kilidi açmak için boş frame eşiği (el titremesi koruması)
+          const SCAN_COOLDOWN=2000;   // aynı kod bu süre içinde tekrar sayılamaz
+          try{const res=await detRef.current.detect(videoRef.current);
+            if(!res.length){noBcFrameRef.current++;if(noBcFrameRef.current>=MISS_FRAMES)lockedBcRef.current='';}
+            else{
+              noBcFrameRef.current=0;
+              const bc=String(res[0].rawValue||'').trim();
+              const now=Date.now();
+              if(bc&&bc!==lockedBcRef.current&&now-lastScanTsRef.current>=SCAN_COOLDOWN){
+                lockedBcRef.current=bc;
+                lastScanTsRef.current=now;
+                scanFnRef.current?.(bc);
+              }
+            }}catch{}
+        }
+        rafRef.current=requestAnimationFrame(loop);
+      };
+      rafRef.current=requestAnimationFrame(loop);
+    }catch(e){toast$('Kamera açılamadı: '+e.message,'error');setMode('text');}
+  },[toast$]);
+
+  useEffect(()=>{
+    if(mode==='camera'){startCam();return()=>stopCam();}
+    stopCam();setTimeout(()=>inputRef.current?.focus(),150);
+  },[mode,startCam,stopCam]);
+  useEffect(()=>()=>stopCam(),[stopCam]);
+
+  const getStatus=useCallback(item=>{
+    const key=getKey(item);const c=counts[key]||0;
+    if(!isRef)return c>0?'ok':'pending';
+    if(eksikSet.has(key))return 'eksik';
+    if(c===0)return 'pending';if(c===item.beklenen)return 'ok';if(c<item.beklenen)return 'partial';return 'excess';
+  },[counts,isRef,eksikSet]);
+
+  const freeItems=!isRef?Object.entries(counts).filter(([,v])=>v>0).map(([key,adet])=>{
+    const p=products[key]||{};return{id:key,ean:p.ean||key,malzemeKodu:p.malzemeKodu||'',urunAdi:p.urunAdi||key,beklenen:0,_adet:adet};
+  }):[];
+  const displayItems=isRef?items:freeItems;
+  const stats=isRef?items.reduce((a,item)=>{const s=getStatus(item);a[s]=(a[s]||0)+1;return a;},{pending:0,ok:0,partial:0,excess:0,eksik:0}):{ok:freeItems.length,pending:0,partial:0,excess:0,eksik:0};
+  stats.eksikCount=eksikSet.size;
+  const totalScanned=isRef?items.reduce((a,i)=>a+(counts[getKey(i)]||0),0):freeItems.reduce((a,i)=>a+i._adet,0);
+  const totalExpected=isRef?items.reduce((a,i)=>a+i.beklenen,0):0;
+  const progress=isRef&&totalExpected?Math.min(100,Math.floor((totalScanned/totalExpected)*100)):0;
+  const visible=filter==='all'?displayItems:filter==='eksik'?displayItems.filter(i=>eksikSet.has(getKey(i))):displayItems.filter(i=>getStatus(i)===filter);
+
+  const ST={pending:{dot:'#94a3b8',cnt:'#94a3b8',card:'#fff',border:'#e2e8f0'},ok:{dot:'#10b981',cnt:'#10b981',card:'#f0fdf4',border:'#86efac'},partial:{dot:'#f59e0b',cnt:'#d97706',card:'#fffbeb',border:'#fde68a'},excess:{dot:'#ef4444',cnt:'#dc2626',card:'#fef2f2',border:'#fecaca'},eksik:{dot:'#94a3b8',cnt:'#94a3b8',card:'#f8fafc',border:'#cbd5e1'}};
+
+  const handleDone=async()=>{
+    setShowModal(false);
+    const total=isRef?totalScanned:freeItems.reduce((a,i)=>a+i._adet,0);
+    if(total===0){toast$('Hiç ürün girilmedi','error');return;}
+    setSaving(true);
+    try{
+      const itemsToSave=isRef
+        ?items.map(item=>{const key=getKey(item);return{ean:item.ean,malzemeKodu:item.malzemeKodu,urunAdi:item.urunAdi,adet:counts[key]||0,beklenenAdet:item.beklenen,hasarliAdet:hasarlilar[key]||0,vasTransfer:vasSet.has(key),eksikKabul:eksikSet.has(key)};})
+        :freeItems.map(item=>({ean:item.ean,malzemeKodu:item.malzemeKodu,urunAdi:item.urunAdi,adet:item._adet,beklenenAdet:0,hasarliAdet:hasarlilar[item.id]||0,vasTransfer:vasSet.has(item.id),eksikKabul:false}));
+      const ref=await addDoc(collection(db,'countEntries'),{
+        sessionId,lokasyon:'MAL_KABUL',tip:'mal_kabul',
+        kullanici:profile?.name||user?.email||'',kullaniciId:user?.uid||'',
+        items:itemsToSave,tarih:Timestamp.now(),durum:'bekliyor',
+        eksikOzet:itemsToSave.filter(i=>i.eksikKabul).map(i=>({ean:i.ean,malzemeKodu:i.malzemeKodu,urunAdi:i.urunAdi,sayilan:i.adet,beklenen:i.beklenenAdet})),
+        hasarliOzet:itemsToSave.filter(i=>i.hasarliAdet>0).map(i=>({ean:i.ean,adet:i.hasarliAdet,urunAdi:i.urunAdi})),
+      });
+      // Draft temizle + lokasyon aşamasına geç
+      await updateDoc(doc(db,'countSessions',sessionId),{lastEntryId:ref.id,draftCounts:{},draftSavedAt:Date.now(),mkFaz:'lokasyon'});
+      clearMkDraft(sessionId);
+      onDone(ref.id, itemsToSave, [...vasSet]);
+    }catch(e){toast$('Hata: '+e.message,'error');}
+    setSaving(false);
+  };
+
+  return(
+    <div style={{height:'100dvh',display:'flex',flexDirection:'column',background:'#f1f5f9',overflow:'hidden'}}>
+      <div style={{background:'#0f172a',padding:'10px 14px',display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
+        <button onClick={()=>{persistNow();onBack();}} style={{background:'rgba(255,255,255,.08)',border:'none',color:'#94a3b8',width:34,height:34,borderRadius:10,cursor:'pointer',fontSize:16,display:'flex',alignItems:'center',justifyContent:'center'}}>←</button>
+        <div style={{flex:1}}>
+          {isRef?(
+            <>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                <span style={{color:'#e2e8f0',fontSize:12,fontWeight:600}}>{items.length} kalem · {totalScanned}/{totalExpected} adet</span>
+                <span style={{color:progress===100?'#10b981':'#94a3b8',fontSize:12,fontWeight:700}}>%{progress}</span>
+              </div>
+              <div style={{height:5,background:'rgba(255,255,255,.1)',borderRadius:4,overflow:'hidden'}}>
+                <div style={{height:'100%',borderRadius:4,transition:'width .35s',background:progress===100?'#10b981':'linear-gradient(90deg,#3b82f6,#6366f1)',width:`${progress}%`}}/>
+              </div>
+            </>
+          ):(
+            <span style={{color:'#e2e8f0',fontSize:13,fontWeight:600}}>📥 Manuel · {freeItems.reduce((a,i)=>a+i._adet,0)} adet</span>
+          )}
+        </div>
+        <button onClick={undoLast} disabled={!scanHistory.length} style={{background:scanHistory.length?'#f59e0b':'#334155',border:'none',color:'#fff',padding:'7px 10px',borderRadius:10,fontWeight:700,fontSize:12,cursor:scanHistory.length?'pointer':'not-allowed',flexShrink:0}}>↩️</button>
+        <button onClick={()=>setShowModal(true)} disabled={saving} style={{background:'linear-gradient(135deg,#10b981,#059669)',border:'none',color:'#fff',padding:'8px 12px',borderRadius:10,fontWeight:700,fontSize:12,cursor:'pointer',flexShrink:0}}>Tamamla</button>
       </div>
 
-      <div style={S.page}>
+      {isRef&&(
+        <div style={{background:'#fff',borderBottom:'1px solid #e2e8f0',padding:'7px 10px',display:'flex',gap:5,overflowX:'auto',flexShrink:0}}>
+          {[{key:'all',lbl:`Tümü ${items.length}`,bg:'#f1f5f9',clr:'#334155'},{key:'ok',lbl:`✅ ${stats.ok||0}`,bg:'#dcfce7',clr:'#166634'},{key:'partial',lbl:`⚠️ ${stats.partial||0}`,bg:'#fef3c7',clr:'#92400e'},{key:'eksik',lbl:`🔒 ${stats.eksik||0}`,bg:'#f1f5f9',clr:'#64748b'},{key:'excess',lbl:`❌ ${stats.excess||0}`,bg:'#fee2e2',clr:'#991b1b'},{key:'pending',lbl:`⬜ ${stats.pending||0}`,bg:'#f1f5f9',clr:'#64748b'}].map(({key,lbl,bg,clr})=>(
+            <button key={key} onClick={()=>setFilter(key)} style={{background:bg,color:clr,border:`2px solid ${filter===key?'#3b82f6':'transparent'}`,padding:'4px 9px',borderRadius:8,fontSize:11,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap',flexShrink:0}}>{lbl}</button>
+          ))}
+        </div>
+      )}
 
-        {/* ── RAF GÖRÜNÜMÜ ── */}
-        {tab==='Raf Görünümü' && (
-          <>
-            {/* HVZ Havuz toggle */}
-            <button onClick={() => { const n=!hvzMode; setHvzMode(n); if(n){setRaf(null);setKat(null);loadHvz();} }}
-              style={{ ...S.btn, width:'100%', marginBottom:12, fontSize:14,
-                background: hvzMode?'#c2410c':'#fff7ed', color: hvzMode?'#fff':'#c2410c',
-                border: hvzMode?'none':'1px solid #fed7aa' }}>
-              📦 HVZ Havuz {hvzMode?'(Açık)':''}
-            </button>
+      <div style={{display:'flex',borderBottom:'1px solid #f1f5f9',flexShrink:0}}>
+        {[['camera','📷 Kamera'],['text','⌨️ Metin']].map(([id,lbl])=>(
+          <button key={id} onClick={()=>setMode(id)} style={{flex:1,padding:'10px 0',fontSize:13,fontWeight:600,border:'none',cursor:'pointer',background:mode===id?'#0f172a':'#fff',color:mode===id?'#fff':'#64748b'}}>{lbl}</button>
+        ))}
+        <button onClick={()=>setShowHasar(!showHasar)} style={{border:'none',padding:'10px 14px',fontSize:13,fontWeight:600,cursor:'pointer',background:showHasar?'#fef3c7':'#fff',color:showHasar?'#d97706':'#64748b',flexShrink:0}}>
+          ⚠️{Object.values(hasarlilar).reduce((a,b)=>a+b,0)>0?` (${Object.values(hasarlilar).reduce((a,b)=>a+b,0)})`:''}
+        </button>
+      </div>
 
-            {hvzMode ? (
-              <div style={S.card}>
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
-                  <p style={{ fontSize:12, fontWeight:700, color:'#c2410c', textTransform:'uppercase', letterSpacing:1 }}>📦 Havuzdaki Ürünler</p>
-                  <button onClick={loadHvz} style={{ background:'#f1f5f9', border:'none', borderRadius:7, padding:'5px 10px', fontSize:12, cursor:'pointer' }}>↻</button>
-                </div>
-                {hvzLoading ? (
-                  <p style={{ color:'#94a3b8', fontSize:13, padding:'20px 0', textAlign:'center' }}>Yükleniyor...</p>
-                ) : hvzProds.length === 0 ? (
-                  <p style={{ color:'#94a3b8', fontSize:13, padding:'20px 0', textAlign:'center' }}>Havuzda bekleyen ürün yok</p>
-                ) : (
-                  <>
-                    <p style={{ fontSize:12, color:'#94a3b8', marginBottom:8 }}>{hvzProds.length} ürün havuzda bekliyor</p>
-                    {hvzProds.map((p,i) => (
-                      <div key={i} style={{ padding:'9px 0', borderBottom:i<hvzProds.length-1?'1px solid #f1f5f9':'none' }}>
-                        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                          <div style={{ flex:1, minWidth:0 }}>
-                            <p style={{ fontSize:13, fontWeight:600, color:'#1e293b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.urunAdi||'—'}</p>
-                            <p style={{ fontSize:10, color:'#94a3b8', fontFamily:'monospace' }}>{p.malzemeKodu}{p.malzemeKodu&&p.ean?' · ':''}{p.ean}</p>
-                          </div>
-                          <span style={{ fontSize:13, fontWeight:800, color:'#c2410c', flexShrink:0 }}>{p.miktar} adet</span>
-                          {isAdmin && (
-                            <button onClick={() => { setHvzTransfer(p); setHvzTargetLok(''); setHvzTransferAdet(String(p.miktar)); }}
-                              style={{ background:'#1e40af', border:'none', borderRadius:8, color:'#fff', padding:'6px 11px', fontSize:11, fontWeight:700, cursor:'pointer', flexShrink:0 }}>
-                              → Lokasyona Taşı
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </>
-                )}
-              </div>
-            ) : (
-            <>
-            <div style={S.card}>
-              <p style={{ fontSize:12, fontWeight:700, color:'#64748b', marginBottom:10,
-                textTransform:'uppercase', letterSpacing:1 }}>Koridor</p>
-              <div style={{ display:'flex', gap:10 }}>
-                {['109','110'].map(k => (
-                  <button key={k} onClick={() => { setKoridor(k); setRaf(null); setKat(null); }}
-                    style={{ ...S.btn, flex:1, fontSize:15,
-                      background: koridor===k?'#1e40af':'#f1f5f9',
-                      color: koridor===k?'#fff':'#475569' }}>
-                    Koridor {k}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div style={S.card}>
-              <p style={{ fontSize:12, fontWeight:700, color:'#64748b', marginBottom:10,
-                textTransform:'uppercase', letterSpacing:1 }}>
-                Raf {raf ? `— Seçili: ${raf}` : `(${getRafRange(koridor).start}-${getRafRange(koridor).end})`}
-              </p>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(8,1fr)', gap:5,
-                maxHeight:200, overflowY:'auto' }}>
-                {getRafList(koridor).map(n => (
-                  <button key={n} onClick={() => setRaf(n)}
-                    style={{ padding:'6px 0', border:'none', borderRadius:6, fontSize:12,
-                      fontWeight:600, cursor:'pointer',
-                      background: raf===n?'#1e40af':'#f1f5f9',
-                      color: raf===n?'#fff':'#475569' }}>
-                    {n}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {raf && (
-              <div style={S.card}>
-                <p style={{ fontSize:12, fontWeight:700, color:'#64748b', marginBottom:10,
-                  textTransform:'uppercase', letterSpacing:1 }}>Kat</p>
-                <div style={{ display:'flex', gap:10 }}>
-                  {['A','B','C','D','E','F'].map(k => (
-                    <button key={k} onClick={() => setKat(k)}
-                      style={{ ...S.btn, flex:1, fontSize:15,
-                        background: kat===k?'#1e40af':'#f1f5f9',
-                        color: kat===k?'#fff':'#475569' }}>
-                      {k}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {rafKod && (
-              <div style={S.card}>
-                <p style={{ fontSize:12, fontWeight:700, color:'#64748b', marginBottom:2,
-                  textTransform:'uppercase', letterSpacing:1 }}>📍 {rafKod}</p>
-                {rafLoading ? (
-                  <p style={{ color:'#94a3b8', fontSize:13, padding:'20px 0', textAlign:'center' }}>Yükleniyor...</p>
-                ) : rafProds.length === 0 ? (
-                  <p style={{ color:'#94a3b8', fontSize:13, padding:'20px 0', textAlign:'center' }}>Bu rafta ürün bulunamadı</p>
-                ) : (
-                  <>
-                    <p style={{ fontSize:12, color:'#94a3b8', marginBottom:8 }}>{rafProds.length} ürün</p>
-                    {rafProds.map((p,i) => (
-                      <ProductRow key={i} p={p} isAdmin={isAdmin}
-                        onAdjust={isAdmin ? (p) => { setAdjustProd(p); setAdjustMiktar(String(p.miktar??'')); } : null} />
-                    ))}
-                  </>
-                )}
-              </div>
-            )}
-            </>
-            )}
-          </>
+      {mode==='camera'&&(
+        <div style={{position:'relative',background:'#000',height:150,flexShrink:0}}>
+          <video ref={videoRef} style={{width:'100%',height:'100%',objectFit:'cover'}} playsInline muted/>
+          {!camOn&&<div style={{position:'absolute',inset:0,background:'rgba(0,0,0,.7)',display:'flex',alignItems:'center',justifyContent:'center'}}><p style={{color:'rgba(255,255,255,.5)',fontSize:13}}>📷 Başlatılıyor...</p></div>}
+          {camOn&&<div style={{position:'absolute',bottom:6,right:8,background:'rgba(16,185,129,.9)',color:'#fff',fontSize:10,fontWeight:700,padding:'3px 8px',borderRadius:6}}>● CANLI</div>}
+        </div>
+      )}
+      {mode==='text'&&(
+        <div style={{background:'#fff',padding:'10px',flexShrink:0}}>
+          <div style={{display:'flex',gap:7}}>
+            <input ref={inputRef} value={barInput} onChange={e=>setBarInput(e.target.value)}
+              onKeyDown={e=>{if(e.key==='Enter'&&barInput.trim()){processScan(barInput);setBarInput('');}}}
+              placeholder="Barkod okutun → Enter" autoFocus
+              style={{flex:1,border:'2px solid #e2e8f0',borderRadius:10,padding:'10px 12px',fontSize:14,background:'#f8fafc',fontFamily:'monospace',outline:'none'}}
+              onFocus={e=>e.target.style.borderColor='#3b82f6'} onBlur={e=>e.target.style.borderColor='#e2e8f0'}/>
+            <button onClick={()=>{if(barInput.trim()){processScan(barInput);setBarInput('');inputRef.current?.focus();}}} style={{background:'linear-gradient(135deg,#3b82f6,#6366f1)',color:'#fff',border:'none',padding:'0 16px',borderRadius:10,fontWeight:700,cursor:'pointer'}}>Tara</button>
+          </div>
+        </div>
+      )}
+
+      {lastScan&&(
+        <div style={{margin:'0 10px',flexShrink:0,background:!lastScan.found?'#fef2f2':lastScan.n>lastScan.expected?'#fef2f2':lastScan.n===lastScan.expected?'#f0fdf4':'#fffbeb',border:`1px solid ${!lastScan.found?'#fecaca':lastScan.n>lastScan.expected?'#fecaca':lastScan.n===lastScan.expected?'#86efac':'#fde68a'}`,borderRadius:12,padding:'8px 12px',display:'flex',alignItems:'center',gap:10}}>
+          <span style={{fontSize:18,flexShrink:0}}>{!lastScan.found?'❓':lastScan.n>lastScan.expected?'🔴':lastScan.n===lastScan.expected?'🟢':'🟡'}</span>
+          <div style={{flex:1,minWidth:0}}>
+            <p style={{fontSize:13,fontWeight:700,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{lastScan.item?.urunAdi||lastScan.code}</p>
+            {lastScan.found&&<p style={{fontSize:10,color:'#64748b',fontFamily:'monospace'}}>{lastScan.code}</p>}
+          </div>
+          {lastScan.found&&isRef&&<span style={{fontSize:17,fontWeight:800,fontFamily:'monospace',color:lastScan.n>lastScan.expected?'#dc2626':lastScan.n===lastScan.expected?'#16a34a':'#d97706'}}>{lastScan.n}/{lastScan.expected}</span>}
+        </div>
+      )}
+
+      <div style={{flex:1,overflowY:'auto',padding:'8px 10px 20px'}}>
+        {showHasar&&displayItems.length>0&&(
+          <div style={{background:'#fef3c7',borderRadius:10,padding:'10px 12px',marginBottom:10,border:'1px solid #fde68a'}}>
+            <p style={{fontSize:12,fontWeight:700,color:'#92400e',marginBottom:8}}>⚠️ Hasarlı Adet</p>
+            {displayItems.filter(i=>(counts[getKey(i)]||i._adet||0)>0).map((item,idx)=>{
+              const key=getKey(item);const sayilan=counts[key]||item._adet||0;
+              return(<div key={idx} style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                <p style={{flex:1,fontSize:12,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi}</p>
+                <input type="number" min="0" max={sayilan} value={hasarlilar[key]||0}
+                  onChange={e=>updateHasarlilar(prev=>({...prev,[key]:Math.min(sayilan,Math.max(0,parseInt(e.target.value)||0))}))}
+                  style={{width:52,textAlign:'center',border:'1px solid #fde68a',borderRadius:7,padding:'4px',fontSize:13,fontWeight:700,background:'#fff'}}/>
+                <span style={{fontSize:11,color:'#92400e'}}>/ {sayilan}</span>
+              </div>);
+            })}
+          </div>
         )}
 
-        {/* ── ÜRÜN ARA ── */}
-        {tab==='Ürün Ara' && (
-          <div style={S.card}>
-            <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-              <input style={{ ...S.input, flex:1 }} placeholder="EAN, malzeme kodu veya ürün adı..."
-                value={searchQ} onChange={e => setSearchQ(e.target.value)} autoFocus />
-              <button onClick={() => searchCamOn ? stopSearchCam() : startSearchCam()}
-                style={{ ...S.btn, background:searchCamOn?'#ef4444':'#1e40af', color:'#fff', whiteSpace:'nowrap', padding:'10px 12px' }}>
-                {searchCamOn ? 'Durdur' : '📷 Tara'}
-              </button>
-            </div>
-            {searchCamOn && (
-              <div style={{ marginTop:10, borderRadius:12, overflow:'hidden', background:'#000', position:'relative' }}>
-                <video ref={searchVideoRef}
-                  style={{ width:'100%', height:'min(42vh,260px)', objectFit:'cover', display:'block', background:'#000' }}
-                  playsInline muted autoPlay />
-                {searchCamMsg && (
-                  <div style={{ position:'absolute', left:10, top:10, background:'rgba(15,23,42,.75)', color:'#fff', borderRadius:8, padding:'5px 8px', fontSize:11, fontWeight:700 }}>
-                    {searchCamMsg}
+        {visible.length===0&&<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'24px 0'}}>Bu filtrede ürün yok</p>}
+
+        {visible.map(item=>{
+          const key=getKey(item);const cnt=counts[key]||item._adet||0;
+          const status=getStatus(item);const st=ST[status]||ST.pending;
+          const hasar=hasarlilar[key]||0;const pct=item.beklenen>0?Math.min(100,(cnt/item.beklenen)*100):0;
+          const isVas=vasSet.has(key);const isEksik=eksikSet.has(key);
+          const isLastScanned=lastScan?.found&&(lastScan.code===item.ean||lastScan.code===item.malzemeKodu||key===getKey(lastScan.item));
+          return(
+            <div key={key} ref={isLastScanned?lastItemRef:null}
+              style={{background:isLastScanned?'#dbeafe':st.card,border:`2px solid ${isLastScanned?'#3b82f6':isEksik?'#94a3b8':st.border}`,borderRadius:14,padding:'11px 12px',marginBottom:7,opacity:isEksik?.7:1,transition:'all .3s',boxShadow:isLastScanned?'0 0 12px rgba(59,130,246,.3)':'none'}}>
+              <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                <div style={{width:8,height:8,borderRadius:'50%',flexShrink:0,background:st.dot}}/>
+                <div style={{flex:1,minWidth:100}}>
+                  <p style={{fontSize:13,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||'—'}</p>
+                  <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>
+                    {item.malzemeKodu}{item.malzemeKodu?' · ':''}{item.ean}
+                    {hasar>0&&<span style={{color:'#d97706',marginLeft:6}}>⚠️{hasar} hasarlı</span>}
+                    {isVas&&<span style={{color:'#7c3aed',marginLeft:6}}>🏷️ VAS</span>}
+                    {isEksik&&<span style={{color:'#64748b',marginLeft:6}}>🔒 Eksik</span>}
+                  </p>
+                </div>
+                {!isEksik&&(
+                  <div style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
+                    <button onClick={()=>setManualCount(item,Math.max(0,cnt-1))} style={{width:28,height:28,borderRadius:8,border:'1px solid #cbd5e1',background:'#f8fafc',fontWeight:800,cursor:'pointer',fontSize:16,lineHeight:1}}>−</button>
+                    <input type="number" min="0" value={cnt} onChange={e=>setManualCount(item,e.target.value)} onFocus={e=>e.target.select()}
+                      style={{width:isRef?50:38,height:28,border:`2px solid ${st.border}`,borderRadius:7,textAlign:'center',fontSize:13,fontWeight:800,fontFamily:'monospace',color:st.cnt,outline:'none',background:'#fff'}}/>
+                    {isRef&&<span style={{fontSize:12,fontWeight:700,fontFamily:'monospace',color:'#94a3b8'}}>/{item.beklenen}</span>}
+                    <button onClick={()=>setManualCount(item,cnt+1)} style={{width:28,height:28,borderRadius:8,border:'1px solid #cbd5e1',background:'#f8fafc',fontWeight:800,cursor:'pointer',fontSize:16,lineHeight:1}}>+</button>
+                    {isRef&&cnt!==item.beklenen&&cnt>0&&<button onClick={()=>setManualCount(item,item.beklenen)} style={{height:28,padding:'0 6px',borderRadius:7,border:'1px solid #bfdbfe',background:'#eff6ff',color:'#2563eb',fontWeight:700,cursor:'pointer',fontSize:11,whiteSpace:'nowrap'}}>={item.beklenen}</button>}
+                    <button onClick={()=>updateVasSet(prev=>{const n=new Set(prev);n.has(key)?n.delete(key):n.add(key);return n;})} title="VAS Transfer"
+                      style={{height:28,width:28,borderRadius:7,border:`1px solid ${isVas?'#7c3aed':'#e2e8f0'}`,background:isVas?'#7c3aed':'#f8fafc',color:isVas?'#fff':'#94a3b8',fontWeight:700,cursor:'pointer',fontSize:12,flexShrink:0}}>🏷️</button>
                   </div>
                 )}
-                <p style={{ fontSize:11, color:'#64748b', background:'#f8fafc', padding:'7px 10px' }}>
-                  Barkod okutulunca arama otomatik yapılır.
-                </p>
+                {isRef&&(status==='partial'||status==='pending')&&!isEksik&&(
+                  <button onClick={()=>updateEksikSet(prev=>{const n=new Set(prev);n.add(key);return n;})}
+                    style={{height:28,padding:'0 8px',borderRadius:7,border:'1px solid #fca5a5',background:'#fff1f2',color:'#dc2626',fontWeight:600,cursor:'pointer',fontSize:11,whiteSpace:'nowrap',flexShrink:0}}>
+                    🔒 Eksik Kapat
+                  </button>
+                )}
+                {isEksik&&(
+                  <button onClick={()=>updateEksikSet(prev=>{const n=new Set(prev);n.delete(key);return n;})}
+                    style={{height:28,padding:'0 8px',borderRadius:7,border:'1px solid #cbd5e1',background:'#f1f5f9',color:'#64748b',fontWeight:600,cursor:'pointer',fontSize:11,whiteSpace:'nowrap',flexShrink:0}}>↩ Aç</button>
+                )}
               </div>
-            )}
-            <div style={{ marginTop:12 }}>
-              {searchLoading && <p style={{ color:'#94a3b8', fontSize:13, textAlign:'center' }}>Aranıyor...</p>}
-              {!searchLoading && searchQ.length>=2 && searchRes.length===0 && (
-                <p style={{ color:'#94a3b8', fontSize:13, textAlign:'center', padding:'16px 0' }}>Sonuç bulunamadı</p>
+              {isRef&&item.beklenen>1&&!isEksik&&(
+                <div style={{marginTop:6,marginLeft:14,height:3,background:'#e2e8f0',borderRadius:4,overflow:'hidden'}}>
+                  <div style={{height:'100%',borderRadius:4,transition:'width .3s',width:`${pct}%`,background:cnt>=item.beklenen?'#10b981':cnt>0?'#f59e0b':'transparent'}}/>
+                </div>
               )}
-              {searchRes.map((p,i) => (
-                <ProductRow key={i} p={p} isAdmin={isAdmin}
-                  onAdjust={isAdmin ? (p) => { setAdjustProd(p); setAdjustMiktar(String(p.miktar??'')); } : null} />
+            </div>
+          );
+        })}
+      </div>
+
+      {showModal&&<TamamlaModal stats={{ok:stats.ok||0,partial:stats.partial||0,excess:stats.excess||0,pending:stats.pending||0,eksikCount:eksikSet.size}} onConfirm={handleDone} onCancel={()=>setShowModal(false)}/>}
+      {toast&&<Toast {...toast} onDone={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+/* ── ANA COMPONENT ── */
+export default function MalKabul() {
+  const { user, profile } = useAuth();
+  const { selectedDepo, depoInfo } = useDepo();
+  const isAdmin = profile?.role==='admin';
+
+  const [view,         setView]         = useState('list');
+  const [sessions,     setSessions]     = useState([]);
+  const [activeSession,setActiveSession]= useState(null);
+  const [products,     setProducts]     = useState({});
+  const [toast,        setToast]        = useState(null);
+  const [loading,      setLoading]      = useState(false);
+  const [sessionAdi,   setSessionAdi]   = useState(()=>{ const d=readSetupDraft(); return d?.sessionAdi||''; });
+  const [mkTur,        setMkTur]        = useState(()=>{ const d=readSetupDraft(); return d?.mkTur||'manuel'; });
+  const [mkRef,        setMkRef]        = useState(()=>{ const d=readSetupDraft(); return d?.mkRef||[]; });
+  const [mkEntries,    setMkEntries]    = useState([]);
+  const [vasItems,     setVasItems]     = useState({});
+  const [mkLokasyonlar,setMkLokasyonlar]= useState({});
+  const [vasList,      setVasList]      = useState([]);
+  const [lokPickerFor, setLokPickerFor] = useState(null); // mk_ozet'te lokasyon seçici açık olan ürün key'i
+  const toast$ = (msg,type='info') => setToast({msg,type,id:Date.now()});
+
+  useEffect(()=>{
+    getDocs(collection(db,'products')).then(snap=>{
+      const m={};
+      snap.docs.forEach(d=>{const p=d.data();if(p.ean)m[String(p.ean).trim()]={...p};if(p.malzemeKodu)m[String(p.malzemeKodu).trim()]={...p};});
+      setProducts(m);
+    });
+  },[]);
+
+  const loadSessions=useCallback(async()=>{
+    try{
+      // orderBy kaldırıldı — composite index gerekmeden çalışır, client-side sıralama yapılır
+      const snap=await getDocs(query(collection(db,'countSessions'),where('tip','==','mal_kabul')));
+      const list=snap.docs.map(d=>({id:d.id,...d.data()}));
+      list.sort((a,b)=>(b.baslangic?.toMillis?.()??0)-(a.baslangic?.toMillis?.()??0));
+      setSessions(list);
+    }catch(e){console.error('loadSessions error:',e);}
+  },[]);
+  useEffect(()=>{loadSessions();},[loadSessions]);
+
+  useEffect(()=>{
+    if(mkRef.length>0||sessionAdi) writeSetupDraft({mkTur,mkRef,sessionAdi});
+    else if(mkTur!=='manuel') writeSetupDraft({mkTur,mkRef:[],sessionAdi});
+  },[mkRef,mkTur,sessionAdi]);
+
+  /* Lokasyon atama draft — anlık localStorage + Firestore kaydı */
+  const persistLok=useCallback((sid,vas,loks)=>{
+    if(!sid)return;
+    writeLokDraft(sid,{vasItems:vas,mkLokasyonlar:loks,savedAt:Date.now()});
+    // Firestore'a da yaz (sayfa/cihaz değişse de kalsın)
+    updateDoc(doc(db,'countSessions',sid),{vasTransferItems:vas,mkLokasyonlar:loks,lokSavedAt:Date.now()}).catch(()=>{});
+  },[]);
+
+  // vasItems/mkLokasyonlar değişince aktif session'a anlık yaz
+  useEffect(()=>{
+    if(activeSession&&view==='mk_ozet') persistLok(activeSession.id,vasItems,mkLokasyonlar);
+  },[vasItems,mkLokasyonlar,activeSession,view,persistLok]);
+
+  const deleteSession=async(session)=>{
+    const label=session.sessionAdi||(session.mkTur==='referansli'?'Referanslı':'Manuel')+' Mal Kabul';
+    if(!window.confirm(`"${label}" oturumu silinecek.\n\nSayım verileri (countEntries) korunacak.\n\nEmin misiniz?`)) return;
+    try{
+      await deleteDoc(doc(db,'countSessions',session.id));
+      clearMkDraft(session.id);
+      setSessions(prev=>prev.filter(s=>s.id!==session.id));
+      toast$('Oturum silindi (veriler korundu)','success');
+    }catch(e){toast$('Hata: '+e.message,'error');}
+  };
+
+  const parseMkRef=(file)=>{
+    const reader=new FileReader();
+    reader.onload=({target:{result}})=>{
+      try{
+        const wb=XLSX.read(new Uint8Array(result),{type:'array'});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+        let hIdx=0,cCode=-1,cUrun=-1,cAdet=-1,cEan=-1;
+        for(let r=0;r<Math.min(rows.length,10);r++){
+          const cells=rows[r].map(c=>String(c||'').toLowerCase().replace(/\s+/g,' ').trim());
+          let found=false;
+          cells.forEach((cell,j)=>{
+            if(/(malzeme|ürün kodu|elis|item)\s*(kodu?|code?)?/.test(cell)&&cCode<0){cCode=j;found=true;}
+            if(/ean|barkod/.test(cell)&&cEan<0){cEan=j;found=true;}
+            if(/ürün adı|sistem/.test(cell)&&cUrun<0){cUrun=j;found=true;}
+            if(/miktar|adet|qty|toplam/.test(cell)&&cAdet<0){cAdet=j;found=true;}
+          });
+          if(found&&cAdet>=0){hIdx=r;break;}
+        }
+        const refData=[];
+        rows.slice(hIdx+1).forEach(row=>{
+          const kod=cCode>=0?String(row[cCode]||'').trim():'';
+          const adet=parseInt(String(row[cAdet]||'0').replace(/\D/g,''))||0;
+          if(!kod||adet<=0)return;
+          refData.push({malzemeKodu:kod,urunAdi:cUrun>=0?String(row[cUrun]||'').trim():'',ean:cEan>=0?String(row[cEan]||'').trim():'',beklenenAdet:adet});
+        });
+        setMkRef(refData);
+        toast$(`${refData.length} kalem yüklendi`,'success');
+      }catch(e){toast$('Dosya hatası: '+e.message,'error');}
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const startMalKabul=async()=>{
+    if(mkTur==='referansli'&&mkRef.length===0){toast$('Referans dosyası seçin','error');return;}
+    setLoading(true);
+    try{
+      if(!activeSession){
+        const ref=await addDoc(collection(db,'countSessions'),{
+          tip:'mal_kabul',durum:'aktif',
+          baslatan:profile?.name||user?.email||'',baslantanId:user?.uid||'',
+          baslangic:Timestamp.now(),mkTur,sessionAdi:sessionAdi.trim()||'Mal Kabul',
+          referenceItems:mkTur==='referansli'?mkRef:[],vasTransferItems:{},mkLokasyonlar:{}
+        });
+        const refItems=mkTur==='referansli'?mkRef:[];
+        const s={id:ref.id,tip:'mal_kabul',durum:'aktif',baslatan:profile?.name||user?.email||'',baslangic:Timestamp.now(),mkTur,sessionAdi:sessionAdi.trim()||'Mal Kabul',referenceItems:refItems};
+        setActiveSession(s);setSessions(prev=>[s,...prev]);
+        // Referans artık session'a ait — setup draft state'lerini temizle ki sonraki mal kabule taşmasın
+        setMkRef([]);setSessionAdi('');setMkTur('manuel');
+      }
+      clearSetupDraft();setView('mk_sayim');
+    }catch(e){toast$('Hata: '+e.message,'error');}
+    setLoading(false);
+  };
+
+  /* openSession: Firestore draft da kontrol et */
+  const openSession=async(s)=>{
+    setActiveSession(s);
+    setMkTur(s.mkTur||'manuel');
+    setMkRef(s.referenceItems||[]);
+    // Lokasyon atama draft'ı: önce localStorage, sonra Firestore
+    const lokDraft=readLokDraft(s.id);
+    setVasItems(lokDraft?.vasItems||s.vasTransferItems||{});
+    setMkLokasyonlar(lokDraft?.mkLokasyonlar||s.mkLokasyonlar||{});
+    // localStorage draft varsa kullan, yoksa Firestore draft
+    const lsDraft=readMkDraft(s.id);
+    if(!lsDraft&&s.draftCounts&&Object.keys(s.draftCounts).length>0){
+      writeMkDraft(s.id,{
+        counts:s.draftCounts,
+        hasarlilar:s.draftHasarlilar||{},
+        vasKeys:s.draftVasKeys||[],
+        eksikKeys:s.draftEksikKeys||[],
+        referenceItems:s.referenceItems||[],
+      });
+    }
+    const snap=await getDocs(query(collection(db,'countEntries'),where('sessionId','==',s.id)));
+    const entries=snap.docs.map(d=>({id:d.id,...d.data()}));
+    setMkEntries(entries.map(e=>({id:e.id,items:e.items||[]})));
+    // Lokasyon aşamasındaysa doğrudan lokasyon atama (mk_ozet) ekranına git — tarama/tekrar VAS atla
+    if(s.mkFaz==='lokasyon'){ setView('mk_ozet'); return; }
+    // Eğer entry yoksa veya draft varsa → sayım ekranına git
+    const hasDraft=lsDraft&&Object.keys(lsDraft.counts||{}).length>0;
+    setView(entries.length>0&&!hasDraft?'mk_ozet':'mk_sayim');
+  };
+
+  const handleSayimDone=async(entryId,items,vasKeys=[])=>{
+    setMkEntries(prev=>[...prev,{id:entryId,items}]);
+    // VAS işaretli ürünleri ANINDA vasItems koleksiyonuna yaz
+    if(vasKeys.length>0&&activeSession){
+      const now=Timestamp.now();
+      const vasUrunler=items.filter(item=>vasKeys.includes(item.ean||item.malzemeKodu)&&!item.eksikKabul&&item.adet>0);
+      try{
+        for(const item of vasUrunler){
+          await addDoc(collection(db,'vasItems'),{
+            ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',adet:item.adet,
+            sessionId:activeSession.id,durum:'etiketleme_bekliyor',tarih:now,
+            mkSessionAdi:activeSession.sessionAdi||'Mal Kabul',
+            mkTarih:now,
+            mkIrsaliyeNo:activeSession.irsaliyeNo||'',
+            mkBaslatan:activeSession.baslatan||profile?.name||user?.email||'',
+            entryId,
+          });
+        }
+        // VAS ürünlerini map'te işaretle (lokasyon atama sayfasında salt-görünür olsun, stoğa yazılmasın)
+        setVasItems(prev=>{const next={...prev};vasUrunler.forEach(item=>{const key=item.ean||item.malzemeKodu;next[key]=(next[key]||0)+item.adet;});return next;});
+        if(vasUrunler.length>0)toast$(`${vasUrunler.length} ürün VAS listesine aktarıldı 🏷️`,'success');
+      }catch(e){toast$('VAS yazma hatası: '+e.message,'error');}
+    }
+    setActiveSession(prev=>prev?{...prev,mkFaz:'lokasyon'}:prev);
+    setView('mk_ozet');
+  };
+
+  const malKabulOnayla=async()=>{
+    if(!activeSession)return;
+    const allItems={};
+    mkEntries.forEach(e=>{(e.items||[]).forEach(item=>{const key=item.malzemeKodu||item.ean;if(!allItems[key])allItems[key]={...item,adet:0,hasarliAdet:0,eksikKabul:false};allItems[key].adet+=item.adet;allItems[key].hasarliAdet+=(item.hasarliAdet||0);if(item.eksikKabul)allItems[key].eksikKabul=true;});});
+    const itemList=Object.values(allItems);
+    // Lokasyona gidecek ama lokasyonu atanmamış ürünler → HVZ havuzuna düşecek
+    const hvzAdaylari=itemList.filter(i=>!i.eksikKabul&&(vasItems[i.ean||i.malzemeKodu]||0)<i.adet&&!(mkLokasyonlar[i.ean]||mkLokasyonlar[i.malzemeKodu]));
+    if(hvzAdaylari.length>0){
+      if(!window.confirm(`${hvzAdaylari.length} ürünün lokasyonu atanmadı.\n\nBu ürünler HVZ (havuz) lokasyonuna alınacak ve sonradan Stok → Raf Görünümü'nden gerçek lokasyona taşınabilecek.\n\nDevam edilsin mi?`))return;
+    }
+    setLoading(true);
+    try{
+      const now=Timestamp.now();
+      // GÜVENLİK AĞI: Eski oturumlarda (mkFaz yok) VAS ürünleri tarama anında yazılmamış olabilir.
+      // Bu oturumlarda VAS map'inde olup koleksiyonda olmayan ürünleri burada yaz.
+      if(!activeSession.mkFaz){
+        const existingVas=await getDocs(query(collection(db,'vasItems'),where('sessionId','==',activeSession.id)));
+        const yazilmisEanlar=new Set(existingVas.docs.map(d=>d.data().ean));
+        for(const item of itemList){
+          if(item.eksikKabul)continue;
+          const vasAdet=vasItems[item.ean||item.malzemeKodu]||0;
+          if(vasAdet>0&&item.ean&&!yazilmisEanlar.has(item.ean)){
+            await addDoc(collection(db,'vasItems'),{
+              ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',adet:vasAdet,
+              sessionId:activeSession.id,durum:'etiketleme_bekliyor',tarih:now,
+              mkSessionAdi:activeSession.sessionAdi||'Mal Kabul',mkTarih:now,
+              mkIrsaliyeNo:activeSession.irsaliyeNo||'',
+              mkBaslatan:activeSession.baslatan||profile?.name||user?.email||'',
+            });
+          }
+        }
+      }
+      const stockSnap=await getDocs(query(collection(db,'stock'),where('depoId','==',selectedDepo)));
+      const stockMap={};stockSnap.docs.forEach(d=>{stockMap[d.id]=d.data();});
+      const batch=writeBatch(db);const movBatch=writeBatch(db);
+      itemList.forEach(item=>{
+        if(!item.ean)return;
+        if(item.eksikKabul)return; // eksik stoğa girmez
+        const vasAdet=vasItems[item.ean||item.malzemeKodu]||0;
+        const lokAdet=item.adet-vasAdet;
+
+        // VAS'a giden kısım zaten tarama "Tamamla" anında vasItems koleksiyonuna yazıldı — burada tekrar yazma, stoğa da girme
+        // Lokasyona giden kısım: stoğa eklenir (lokasyon yoksa HVZ)
+        if(lokAdet<=0)return; // tamamı VAS'a gidiyorsa stoğa yazma
+        const prev=(stockMap[item.ean]?.miktar)||0;
+        const next=prev+lokAdet;
+        const lok=mkLokasyonlar[item.ean]||mkLokasyonlar[item.malzemeKodu]||'HVZ';
+        const prevByLok=stockMap[item.ean]?.byLocation||{};
+        const newByLok={...prevByLok,[lok]:(prevByLok[lok]||0)+lokAdet};
+        batch.set(doc(db,'stock',stokDocId(selectedDepo,item.ean)),{ean:item.ean,miktar:next,urunAdi:item.urunAdi||'',malzemeKodu:item.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
+        movBatch.set(doc(collection(db,'stockMovements')),{tarih:now,tip:'mal_kabul',ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',miktar:lokAdet,oncekiMiktar:prev,sonrakiMiktar:next,hasarliAdet:item.hasarliAdet||0,vasAdet,lokAdet,lokasyon:lok,kaynak:`mal_kabul:${activeSession.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
+      });
+      await batch.commit();await movBatch.commit();
+      await updateDoc(doc(db,'countSessions',activeSession.id),{durum:'tamamlandi',bitis:now});
+      clearMkDraft(activeSession.id);clearSetupDraft();clearLokDraft(activeSession.id);
+      toast$(hvzAdaylari.length>0?`Tamamlandı ✓ (${hvzAdaylari.length} ürün HVZ havuzuna alındı)`:'Mal kabul stoğa eklendi ✓','success');
+      setView('list');setActiveSession(null);setMkEntries([]);setVasItems({});setMkLokasyonlar({});setMkRef([]);setSessionAdi('');
+      loadSessions();
+    }catch(e){toast$('Hata: '+e.message,'error');}
+    setLoading(false);
+  };
+
+  const loadVasItems=useCallback(async()=>{
+    const snap=await getDocs(query(collection(db,'vasItems'),where('durum','==','etiketleme_bekliyor')));
+    const items=snap.docs.map(d=>({id:d.id,...d.data()}));
+    const sessionIds=[...new Set(items.map(i=>i.sessionId).filter(Boolean))];
+    const sessionInfoMap={};
+    await Promise.all(sessionIds.map(async sid=>{
+      try{const sSnap=await getDocs(query(collection(db,'countSessions'),where('__name__','==',sid)));
+        if(!sSnap.empty){const s=sSnap.docs[0].data();sessionInfoMap[sid]={baslatan:s.baslatan||'',tarih:s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||'',mkTur:s.mkTur||'manuel',sessionAdi:s.sessionAdi||'',irsaliyeNo:s.irsaliyeNo||''};}
+      }catch{}
+    }));
+    setVasList(items.map(i=>{
+      const sInfo=sessionInfoMap[i.sessionId]||null;
+      const fmtMk=(()=>{try{return i.mkTarih?.toDate?.()?.toLocaleDateString('tr-TR')||'';}catch{return '';}})();
+      // VAS kaydındaki kaynak alanlarını öncele, yoksa session'dan al
+      return {...i,_sessionInfo:{
+        baslatan:i.mkBaslatan||sInfo?.baslatan||'',
+        tarih:fmtMk||sInfo?.tarih||'',
+        mkTur:sInfo?.mkTur||'manuel',
+        sessionAdi:i.mkSessionAdi||sInfo?.sessionAdi||'Mal Kabul',
+        irsaliyeNo:i.mkIrsaliyeNo||sInfo?.irsaliyeNo||'',
+      }};
+    }));
+  },[]);
+
+  const vasLokasyonaGonder=async(vasItem,lokasyon)=>{
+    if(!lokasyon){toast$('Lokasyon seçin','error');return;}
+    try{
+      const now=Timestamp.now();
+      const stockSnap=await getDocs(query(collection(db,'stock'),where('ean','==',vasItem.ean)));
+      const prev=stockSnap.empty?0:(stockSnap.docs[0].data().miktar||0);
+      const prevByLok=stockSnap.empty?{}:(stockSnap.docs[0].data().byLocation||{});
+      const next=prev+vasItem.adet;
+      const newByLok={...prevByLok,[lokasyon]:(prevByLok[lokasyon]||0)+vasItem.adet};
+      await setDoc(doc(db,'stock',stokDocId(selectedDepo,vasItem.ean)),{ean:vasItem.ean,miktar:next,urunAdi:vasItem.urunAdi||'',malzemeKodu:vasItem.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
+      await updateDoc(doc(db,'vasItems',vasItem.id),{durum:'tamamlandi',lokasyon,bitis:now});
+      await addDoc(collection(db,'stockMovements'),{tarih:now,tip:'vas_lokasyon',ean:vasItem.ean,malzemeKodu:vasItem.malzemeKodu||'',urunAdi:vasItem.urunAdi||'',miktar:vasItem.adet,oncekiMiktar:prev,sonrakiMiktar:next,lokasyon,kaynak:`vas:${vasItem.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
+      setVasList(prev=>prev.filter(v=>v.id!==vasItem.id));
+      toast$(`${vasItem.urunAdi||vasItem.ean}: ${vasItem.adet} adet stoğa eklendi ✓`,'success');
+    }catch(e){toast$('Hata: '+e.message,'error');}
+  };
+
+  /* ── VAS: Tek ürün listeden çıkar (iptal et) ── */
+  const vasUrunuCikar=async(vasItem)=>{
+    if(!window.confirm(`"${vasItem.urunAdi||vasItem.ean}" VAS listesinden çıkarılsın mı?\n\nBu ürün stoğa eklenmeyecek ve mal kabul kaydında eksik olarak görünecek.`))return;
+    try{
+      await deleteDoc(doc(db,'vasItems',vasItem.id));
+      setVasList(prev=>prev.filter(v=>v.id!==vasItem.id));
+      toast$(`${vasItem.urunAdi||vasItem.ean} VAS listesinden çıkarıldı`,'info');
+    }catch(e){toast$('Hata: '+e.message,'error');}
+  };
+
+  /* ── VAS: Tüm grubu iptal et ── */
+  const vasGrubuIptal=async(sessionId, groupItems)=>{
+    if(!window.confirm(`Bu mal kabule ait tüm VAS ürünleri (${groupItems.length} kalem) listeden çıkarılsın mı?\n\nBu işlem geri alınamaz. Ürünler stoğa eklenmeyecek.`))return;
+    try{
+      await Promise.all(groupItems.map(item=>deleteDoc(doc(db,'vasItems',item.id))));
+      setVasList(prev=>prev.filter(v=>v.sessionId!==sessionId));
+      toast$(`${groupItems.length} ürün VAS listesinden çıkarıldı`,'info');
+    }catch(e){toast$('Hata: '+e.message,'error');}
+  };
+
+  const S={card:{background:'#fff',borderRadius:14,padding:'14px 16px',border:'1px solid #e2e8f0',marginBottom:12},btn:{border:'none',borderRadius:10,padding:'10px 16px',fontSize:13,fontWeight:600,cursor:'pointer'}};
+
+  if(view==='mk_sayim'&&activeSession){
+    return <MalKabulSayimSession
+      sessionId={activeSession.id}
+      referenceItems={mkTur==='referansli'?mkRef:(activeSession.referenceItems||[])}
+      products={products} onDone={handleSayimDone} onBack={()=>setView('list')}/>;
+  }
+
+  if(view==='mal_kabul'){
+    return(
+      <div>
+        <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
+          <button onClick={()=>setView('list')} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
+          <p style={{color:'#fff',fontWeight:700,fontSize:14}}>📥 Yeni Mal Kabul</p>
+        </div>
+        <div style={{padding:16}}>
+          <div style={S.card}>
+            <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:10}}>Sayım Türü</p>
+            <div style={{display:'flex',gap:10}}>
+              {[['manuel','✍️ Manuel'],['referansli','📋 Referanslı']].map(([t,l])=>(
+                <button key={t} onClick={()=>setMkTur(t)} style={{...S.btn,flex:1,background:mkTur===t?'#1e40af':'#f1f5f9',color:mkTur===t?'#fff':'#475569'}}>{l}</button>
               ))}
             </div>
           </div>
-        )}
-
-        {/* ── HAREKETLER ── */}
-        {tab==='Hareketler' && (
-          <div style={S.card}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
-              <p style={{ fontSize:12, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:1 }}>
-                Son 100 Hareket
-              </p>
-              <button onClick={loadHareketler} style={{ ...S.btn, padding:'6px 12px', background:'#f1f5f9', color:'#64748b', fontSize:12 }}>↻ Yenile</button>
-            </div>
-            {hareketLoading ? (
-              <p style={{ color:'#94a3b8', fontSize:13, textAlign:'center', padding:'20px 0' }}>Yükleniyor...</p>
-            ) : hareketler.length===0 ? (
-              <p style={{ color:'#94a3b8', fontSize:13, textAlign:'center', padding:'20px 0' }}>Henüz hareket yok</p>
-            ) : (
-              hareketler.map((h,i) => (
-                <div key={i} style={{ display:'flex', alignItems:'center', gap:10,
-                  padding:'8px 0', borderBottom:'1px solid #f1f5f9' }}>
-                  <div style={{ background: tipColor[h.tip]||'#94a3b8', color:'#fff', borderRadius:6,
-                    padding:'2px 8px', fontSize:11, fontWeight:700, flexShrink:0, whiteSpace:'nowrap' }}>
-                    {tipLabel[h.tip]||h.tip}
-                  </div>
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <p style={{ fontSize:12, fontWeight:600, color:'#1e293b',
-                      overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                      {h.urunAdi||h.ean}
-                    </p>
-                    <p style={{ fontSize:10, color:'#94a3b8' }}>
-                      {h.yapan} · {h.tarih?.toDate?.()?.toLocaleDateString('tr-TR')}
-                      {h.lokasyon && <span style={{ marginLeft:6, color:'#3b82f6', fontWeight:600 }}>📍{h.lokasyon}</span>}
-                      {h.kaynak && <span style={{ marginLeft:6 }}>· {h.kaynak.replace('irsaliye:','İrsaliye: ')}</span>}
-                    </p>
-                    {h.malzemeKodu && (
-                      <p style={{ fontSize:10, color:'#cbd5e1', fontFamily:'monospace' }}>{h.malzemeKodu}</p>
-                    )}
-                  </div>
-                  <div style={{ textAlign:'right', flexShrink:0 }}>
-                    <p style={{ fontSize:13, fontWeight:700, color: (h.miktar||0)>=0?'#10b981':'#ef4444' }}>
-                      {(h.miktar||0)>0?'+':''}{h.miktar}
-                    </p>
-                    <p style={{ fontSize:10, color:'#94a3b8' }}>{h.oncekiMiktar}→{h.sonrakiMiktar}</p>
-                  </div>
+          {mkTur==='referansli'&&(
+            <div style={S.card}>
+              <p style={{fontSize:13,fontWeight:700,marginBottom:4}}>Referans Dosyası</p>
+              {mkRef.length>0
+                ?<div style={{display:'flex',alignItems:'center',gap:10}}>
+                  <p style={{fontSize:12,color:'#10b981',fontWeight:600,flex:1}}>✅ {mkRef.length} kalem yüklendi</p>
+                  <button onClick={()=>{setMkRef([]);clearSetupDraft();}} style={{...S.btn,background:'#fee2e2',color:'#ef4444',padding:'6px 12px',fontSize:12}}>Değiştir</button>
                 </div>
-              ))
-            )}
-          </div>
-        )}
-
-        {/* ── YÖNET ── */}
-        {tab==='Yönet' && isAdmin && (
-          <>
-            {/* Kök Stok */}
-            <div style={S.card}>
-              <p style={{ fontSize:13, fontWeight:700, color:'#1e293b', marginBottom:4 }}>📥 Kök Stok Yükle</p>
-              <p style={{ fontSize:12, color:'#ef4444', marginBottom:6 }}>⚠️ Tüm stok verisi sıfırlanır</p>
-              <p style={{ fontSize:12, color:'#64748b', marginBottom:10 }}>
-                Format: EAN Kodu, Malzeme Kodu, Ürün Adı, Miktar, Lokasyon (opsiyonel)
-              </p>
-              <label style={{ ...S.btn, background:'#1e40af', color:'#fff',
-                display:'inline-block', cursor:'pointer', opacity:impLoading?0.6:1 }}>
-                {impLoading ? 'Yükleniyor...' : '📂 Excel Seç'}
-                <input type="file" accept=".xlsx,.xls,.csv" style={{ display:'none' }}
-                  disabled={impLoading}
-                  onChange={e => { if(e.target.files[0]) importKokStok(e.target.files[0]); e.target.value=''; }} />
-              </label>
-            </div>
-
-            {/* Sevkiyat Excel */}
-            <div style={S.card}>
-              <p style={{ fontSize:13, fontWeight:700, color:'#1e293b', marginBottom:4 }}>📦 Sevkiyat Ekle (Excel)</p>
-              <p style={{ fontSize:12, color:'#64748b', marginBottom:10 }}>Mevcut stoğun üstüne eklenir.</p>
-              {!sevkiyatPreview ? (
-                <label style={{ ...S.btn, background:'#10b981', color:'#fff',
-                  display:'inline-block', cursor:'pointer', opacity:impLoading?0.6:1 }}>
-                  {impLoading ? 'Yükleniyor...' : '📂 Excel Seç'}
-                  <input type="file" accept=".xlsx,.xls,.csv" style={{ display:'none' }}
-                    disabled={impLoading}
-                    onChange={e => { if(e.target.files[0]) importSevkiyat(e.target.files[0]); e.target.value=''; }} />
+                :<label style={{...S.btn,background:'#f1f5f9',color:'#475569',display:'inline-block',cursor:'pointer'}}>
+                  📂 Dosya Seç
+                  <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>{if(e.target.files[0])parseMkRef(e.target.files[0]);e.target.value='';}}/>
                 </label>
-              ) : (
-                <div>
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-                    <p style={{ fontSize:12, fontWeight:700, color:'#10b981' }}>✅ {sevkiyatPreview.items.length} ürün</p>
-                    <button onClick={() => setSevkiyatPreview(null)}
-                      style={{ ...S.btn, padding:'5px 10px', fontSize:12, background:'#fee2e2', color:'#ef4444' }}>İptal</button>
-                  </div>
-                  <div style={{ background:'#f0fdf4', borderRadius:10, padding:'10px 12px', marginBottom:10, border:'1px solid #bbf7d0' }}>
-                    <p style={{ fontSize:11, fontWeight:700, color:'#15803d', marginBottom:6 }}>Tümüne aynı lokasyon:</p>
-                    <input placeholder="Örn: A109S013B" style={{ ...S.input, fontFamily:'monospace' }}
-                      onChange={e => {
-                        const lok = e.target.value.trim().toUpperCase();
-                        if (!lok) return;
-                        setSevkiyatPreview(prev => ({
-                          ...prev,
-                          lokasyonlar: Object.fromEntries(prev.items.map(i => [i.ean, lok]))
-                        }));
-                      }} />
-                  </div>
-                  {sevkiyatPreview.items.map((item, i) => (
-                    <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 0', borderBottom:'1px solid #f1f5f9' }}>
-                      <div style={{ flex:1, minWidth:0 }}>
-                        <p style={{ fontSize:12, fontWeight:600, color:'#1e293b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                          {item.urunAdi||item.ean}
-                        </p>
-                        <p style={{ fontSize:10, color:'#94a3b8' }}>{item.miktar} adet eklenecek</p>
-                      </div>
-                      <input placeholder="Lokasyon"
-                        value={sevkiyatPreview.lokasyonlar[item.ean]||''}
-                        onChange={e => setSevkiyatPreview(prev => ({
-                          ...prev,
-                          lokasyonlar: { ...prev.lokasyonlar, [item.ean]: e.target.value.trim().toUpperCase() }
-                        }))}
-                        style={{ width:110, padding:'5px 8px', border:'1px solid #e2e8f0',
-                          borderRadius:7, fontSize:11, fontFamily:'monospace', outline:'none',
-                          background: sevkiyatPreview.lokasyonlar[item.ean]?'#f0fdf4':'#fff' }} />
-                    </div>
-                  ))}
-                  <button onClick={saveSevkiyatWithLok} disabled={impLoading}
-                    style={{ ...S.btn, width:'100%', marginTop:10, background:'#10b981', color:'#fff', opacity:impLoading?0.6:1 }}>
-                    {impLoading ? 'Kaydediliyor...' : '✅ Lokasyonlarla Kaydet'}
-                  </button>
-                </div>
-              )}
+              }
             </div>
+          )}
+          <div style={S.card}>
+            <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:6}}>Oturum Adı <span style={{fontSize:11,color:'#94a3b8',fontWeight:400}}>(opsiyonel)</span></p>
+            <input value={sessionAdi} onChange={e=>setSessionAdi(e.target.value)} placeholder="Örn: GHD Mayıs, Wella Lot 42..."
+              style={{width:'100%',padding:'10px 14px',borderRadius:10,border:'1px solid #e2e8f0',fontSize:14,outline:'none',boxSizing:'border-box'}}/>
+          </div>
+          <button onClick={startMalKabul} disabled={loading||(mkTur==='referansli'&&mkRef.length===0)}
+            style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',opacity:(mkTur==='referansli'&&mkRef.length===0)?.5:1}}>
+            {loading?'...':'Sayıma Başla →'}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
-            {/* Manuel */}
-            <div style={S.card}>
-              <p style={{ fontSize:13, fontWeight:700, color:'#1e293b', marginBottom:10 }}>✍️ Manuel Stok Hareketi</p>
-              <div style={{ display:'flex', gap:6, marginBottom:12, background:'#f1f5f9', borderRadius:10, padding:4 }}>
-                {[['giris','📥 Giriş','#10b981'],['cikis','📤 Çıkış','#ef4444']].map(([tip,lbl,clr])=>(
-                  <button key={tip} onClick={()=>setManualTip(tip)}
-                    style={{ flex:1, border:'none', borderRadius:8, padding:'8px 0', fontSize:13,
-                      fontWeight:700, cursor:'pointer',
-                      background: manualTip===tip ? clr : 'transparent',
-                      color: manualTip===tip ? '#fff' : '#64748b' }}>
-                    {lbl}
-                  </button>
-                ))}
-              </div>
-              <input style={{ ...S.input, marginBottom:10 }}
-                placeholder="EAN veya malzeme kodu (tam girin)"
-                value={manualQuery}
-                onChange={e => { setManualQuery(e.target.value); lookupManual(e.target.value); }} />
-              {manualProd && (
-                <div style={{ background:'#f8fafc', borderRadius:10, padding:'10px 12px' }}>
-                  <p style={{ fontSize:13, fontWeight:600, color:'#1e293b' }}>{manualProd.urunAdi}</p>
-                  <p style={{ fontSize:11, color:'#94a3b8', fontFamily:'monospace', marginBottom:4 }}>
-                    {manualProd.malzemeKodu} · {manualProd.ean}
-                  </p>
-                  <p style={{ fontSize:12, color:'#64748b', marginBottom:10 }}>
-                    Toplam stok: <strong>{manualProd.currentMiktar}</strong> adet
-                  </p>
-                  <p style={{ fontSize:11, fontWeight:700, color:'#64748b', marginBottom:6, textTransform:'uppercase', letterSpacing:1 }}>Lokasyon</p>
-                  <div style={{ display:'flex', gap:8, marginBottom:8, alignItems:'center' }}>
-                    <div style={{ flex:1, background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, padding:'8px 12px',
-                      fontSize:13, fontFamily:'monospace', color: manualLok ? '#1e293b' : '#94a3b8', fontWeight:600 }}>
-                      {manualLok || 'Lokasyon seçilmedi'}
-                    </div>
-                    <button onClick={()=>setShowLokPicker(p=>!p)}
-                      style={{ ...S.btn, padding:'8px 12px', fontSize:12, background:'#e2e8f0', color:'#475569' }}>
-                      {showLokPicker ? '▲ Kapat' : '▼ Seç'}
-                    </button>
-                    {manualLok && (
-                      <button onClick={()=>setManualLok('')}
-                        style={{ ...S.btn, padding:'8px 10px', fontSize:12, background:'#fee2e2', color:'#ef4444' }}>✕</button>
-                    )}
-                  </div>
-                  {showLokPicker && (
-                    <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:12, marginBottom:10 }}>
-                      <p style={{ fontSize:11, fontWeight:700, color:'#64748b', marginBottom:6 }}>KORİDOR</p>
-                      <div style={{ display:'flex', gap:8, marginBottom:10 }}>
-                        {['109','110'].map(k=>(
-                          <button key={k} onClick={()=>{ setLokKoridor(k); setLokRaf(null); setLokKat(null); setManualLok(''); }}
-                            style={{ flex:1, border:'none', borderRadius:8, padding:'7px 0', fontSize:13,
-                              fontWeight:700, cursor:'pointer',
-                              background: lokKoridor===k?'#1e40af':'#f1f5f9',
-                              color: lokKoridor===k?'#fff':'#475569' }}>
-                            {k}
-                          </button>
-                        ))}
-                      </div>
-                      <p style={{ fontSize:11, fontWeight:700, color:'#64748b', marginBottom:6 }}>
-                        RAF {lokRaf?`— ${lokRaf}`:`(${getRafRange(lokKoridor).start}-${getRafRange(lokKoridor).end})`}
-                      </p>
-                      <div style={{ display:'grid', gridTemplateColumns:'repeat(8,1fr)', gap:4, maxHeight:160, overflowY:'auto', marginBottom:10 }}>
-                        {getRafList(lokKoridor).map(n=>(
-                          <button key={n} onClick={()=>{ setLokRaf(n); setLokKat(null); setManualLok(''); }}
-                            style={{ padding:'5px 0', border:'none', borderRadius:5, fontSize:11,
-                              fontWeight:600, cursor:'pointer',
-                              background: lokRaf===n?'#1e40af':'#f1f5f9',
-                              color: lokRaf===n?'#fff':'#475569' }}>
-                            {n}
-                          </button>
-                        ))}
-                      </div>
-                      {lokRaf && (
-                        <>
-                          <p style={{ fontSize:11, fontWeight:700, color:'#64748b', marginBottom:6 }}>KAT</p>
-                          <div style={{ display:'flex', gap:6 }}>
-                            {['A','B','C','D','E','F'].map(k=>(
-                              <button key={k} onClick={()=>{
-                                setLokKat(k);
-                                const kod = `A${lokKoridor}S${String(lokRaf).padStart(3,'0')}${k}`;
-                                setManualLok(kod); setShowLokPicker(false);
-                              }}
-                                style={{ flex:1, border:'none', borderRadius:8, padding:'7px 0', fontSize:13,
-                                  fontWeight:700, cursor:'pointer',
-                                  background: lokKat===k?'#1e40af':'#f1f5f9',
-                                  color: lokKat===k?'#fff':'#475569' }}>
-                                {k}
-                              </button>
-                            ))}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  )}
-                  {manualProd.byLocation && Object.keys(manualProd.byLocation).length>0 && (
-                    <div style={{ marginBottom:10, fontSize:11, color:'#64748b', background:'#fff',
-                      borderRadius:8, padding:'6px 10px', border:'1px solid #e2e8f0' }}>
-                      {Object.entries(manualProd.byLocation).filter(([,m])=>m>0).map(([l,m])=>(
-                        <span key={l} style={{ marginRight:10, cursor:'pointer',
-                          color: manualLok===l?'#1e40af':'#64748b',
-                          fontWeight: manualLok===l?700:400 }}
-                          onClick={()=>{ setManualLok(l); setShowLokPicker(false); }}>
-                          📍{l}: {m}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  <div style={{ display:'flex', gap:8 }}>
-                    <input type="number" style={{ ...S.input, flex:1 }}
-                      placeholder={manualTip==='giris'?'Eklenecek miktar':'Çıkarılacak miktar'}
-                      value={manualMiktar} onChange={e => setManualMiktar(e.target.value)} />
-                    <button onClick={addManualStock} disabled={manualLoading}
-                      style={{ ...S.btn, flexShrink:0,
-                        background: manualTip==='giris'?'#10b981':'#ef4444',
-                        color:'#fff', opacity:manualLoading?0.6:1 }}>
-                      {manualLoading ? '...' : manualTip==='giris' ? 'Ekle' : 'Çıkar'}
-                    </button>
-                  </div>
+  if(view==='mk_ozet'&&activeSession){
+    const allItems={};
+    mkEntries.forEach(e=>{(e.items||[]).forEach(item=>{const key=item.malzemeKodu||item.ean;if(!allItems[key])allItems[key]={...item,adet:0,hasarliAdet:0,eksikKabul:false};allItems[key].adet+=item.adet;allItems[key].hasarliAdet+=(item.hasarliAdet||0);if(item.eksikKabul)allItems[key].eksikKabul=true;});});
+    const itemList=Object.values(allItems);
+    const eksikItems=itemList.filter(i=>i.eksikKabul);
+    // VAS'a gidecek ürünler: vasItems map'inde adet>0 olanlar
+    const vasItemsList=itemList.filter(i=>!i.eksikKabul&&(vasItems[i.ean||i.malzemeKodu]||0)>0);
+    // Lokasyona gidecek (normal) ürünler: VAS değil, eksik değil
+    const lokItemsList=itemList.filter(i=>!i.eksikKabul&&(vasItems[i.ean||i.malzemeKodu]||0)<=0);
+    const toplam=lokItemsList.reduce((a,i)=>a+i.adet,0);
+    const vasToplam=vasItemsList.reduce((a,i)=>a+(vasItems[i.ean||i.malzemeKodu]||0),0);
+    const toplamHasar=itemList.reduce((a,i)=>a+(i.hasarliAdet||0),0);
+    const refMap=Object.fromEntries(mkRef.map(r=>[r.malzemeKodu,r]));
+    const tamEslesen=mkRef.length>0&&itemList.filter(i=>!i.eksikKabul).every(i=>{const r=refMap[i.malzemeKodu];return r&&r.beklenenAdet===i.adet;});
+    return(
+      <div>
+        <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
+          <button onClick={()=>setView('list')} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
+          <p style={{color:'#fff',fontWeight:700,fontSize:14}}>📥 {activeSession?.sessionAdi||'Mal Kabul Özeti'}</p>
+        </div>
+        <div style={{padding:16}}>
+          <div style={{...S.card,background:'#f0fdf4',border:'1px solid #bbf7d0'}}>
+            <p style={{fontSize:13,fontWeight:700,color:'#15803d'}}>📊 Özet</p>
+            <p style={{fontSize:12,color:'#166534',marginTop:4}}>📍 {lokItemsList.length} kalem · {toplam.toLocaleString()} adet → stoğa girecek</p>
+            {vasItemsList.length>0&&<p style={{fontSize:12,color:'#7c3aed',marginTop:2,fontWeight:600}}>🏷️ {vasItemsList.length} kalem · {vasToplam.toLocaleString()} adet → VAS listesine aktarıldı (stoğa girmez)</p>}
+            {eksikItems.length>0&&<p style={{fontSize:12,color:'#dc2626',marginTop:2,fontWeight:600}}>🔒 {eksikItems.length} kalem eksik kabul — stoğa girmeyecek</p>}
+            {toplamHasar>0&&<p style={{fontSize:12,color:'#d97706',marginTop:2}}>⚠️ {toplamHasar} hasarlı adet</p>}
+            {tamEslesen&&<p style={{fontSize:12,color:'#10b981',marginTop:4,fontWeight:600}}>✅ Referans ile tam eşleşme</p>}
+            {mkRef.length>0&&!tamEslesen&&<p style={{fontSize:12,color:'#d97706',marginTop:4,fontWeight:600}}>⚠️ Referans ile fark var</p>}
+          </div>
+
+          {eksikItems.length>0&&(
+            <div style={{...S.card,border:'1px solid #fca5a5',background:'#fff1f2'}}>
+              <p style={{fontSize:12,fontWeight:700,color:'#dc2626',marginBottom:8}}>🔒 Eksik Kabul — Stoğa Girmeyecek</p>
+              {eksikItems.map((item,i)=>(
+                <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 0',borderBottom:'1px solid #fecaca'}}>
+                  <div style={{flex:1}}><p style={{fontSize:12,fontWeight:600,color:'#1e293b'}}>{item.urunAdi||item.malzemeKodu}</p></div>
+                  <p style={{fontSize:11,color:'#dc2626'}}>{item.adet}/{item.beklenenAdet} adet</p>
                 </div>
-              )}
+              ))}
             </div>
-          </>
+          )}
+
+          {/* VAS'a aktarılan ürünler — salt görünür (zaten VAS listesine yazıldı) */}
+          {vasItemsList.length>0&&(
+            <div style={{...S.card,border:'1px solid #ddd6fe',background:'#faf5ff'}}>
+              <p style={{fontSize:13,fontWeight:700,color:'#7c3aed',marginBottom:4}}>🏷️ VAS Listesine Aktarıldı</p>
+              <p style={{fontSize:11,color:'#7c3aed',marginBottom:10,opacity:.8}}>Bu ürünler VAS listesine gönderildi ve stoğa alınmayacak. Lokasyon atama VAS listesi bölümünde yapılır.</p>
+              {vasItemsList.map((item,i)=>{
+                const key=item.ean||item.malzemeKodu;
+                return(<div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:i<vasItemsList.length-1?'1px solid #ede9fe':'none'}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <p style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
+                    <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{item.malzemeKodu||''}{item.malzemeKodu&&item.ean?' · ':''}{item.ean} · {vasItems[key]} adet</p>
+                  </div>
+                  <span style={{background:'#ede9fe',color:'#7c3aed',borderRadius:7,padding:'5px 10px',fontSize:11,fontWeight:700,flexShrink:0}}>🏷️ VAS</span>
+                </div>);
+              })}
+            </div>
+          )}
+
+          {/* Lokasyona gidecek ürünler — VAS işaretle + lokasyon ata */}
+          {lokItemsList.length>0&&(
+            <div style={S.card}>
+              <p style={{fontSize:13,fontWeight:700,marginBottom:4}}>📍 Lokasyon Ata (Stoğa Girecek)</p>
+              <p style={{fontSize:11,color:'#64748b',marginBottom:10}}>İstersen ürünü 🏷️ ile VAS listesine de gönderebilirsin</p>
+              <div style={{background:'#eff6ff',borderRadius:8,padding:'8px 10px',marginBottom:10}}>
+                <p style={{fontSize:11,fontWeight:600,color:'#1d4ed8',marginBottom:5}}>Tümüne aynı lokasyon:</p>
+                <div style={{display:'flex',gap:6}}>
+                  <input placeholder="A109S013B" style={{flex:1,padding:'7px 10px',border:'1px solid #bfdbfe',borderRadius:7,fontSize:13,fontFamily:'monospace',outline:'none',boxSizing:'border-box'}}
+                    onChange={e=>{const lok=e.target.value.trim().toUpperCase();if(!lok)return;const n={...mkLokasyonlar};lokItemsList.forEach(i=>{n[i.ean||i.malzemeKodu]=lok;});setMkLokasyonlar(n);}}/>
+                  <button onClick={()=>{const n={...mkLokasyonlar};lokItemsList.forEach(i=>{n[i.ean||i.malzemeKodu]='HVZ';});setMkLokasyonlar(n);}}
+                    style={{background:'#fff7ed',border:'1px solid #fed7aa',borderRadius:7,color:'#c2410c',padding:'7px 12px',fontSize:12,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'}}>📦 HVZ</button>
+                </div>
+              </div>
+              {lokItemsList.map((item,i)=>{
+                const key=item.ean||item.malzemeKodu;
+                const atandi=!!mkLokasyonlar[key];
+                return(
+                <div key={i} style={{padding:'8px 0',borderBottom:i<lokItemsList.length-1?'1px solid #f1f5f9':'none'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <p style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.urunAdi||item.malzemeKodu}</p>
+                      <p style={{fontSize:10,color:'#94a3b8',fontFamily:'monospace'}}>{item.malzemeKodu||''}{item.malzemeKodu&&item.ean?' · ':''}{item.ean} · {item.adet} adet</p>
+                    </div>
+                    <input placeholder="Lokasyon" value={mkLokasyonlar[key]||''}
+                      onChange={e=>setMkLokasyonlar(prev=>({...prev,[key]:e.target.value.trim().toUpperCase()}))}
+                      style={{width:96,padding:'5px 8px',border:'1px solid #e2e8f0',borderRadius:7,fontSize:11,fontFamily:'monospace',outline:'none',background:atandi?'#f0fdf4':'#fff',flexShrink:0}}/>
+                    <button onClick={()=>setLokPickerFor(key)} title="Lokasyon seç"
+                      style={{background:'#1e40af',border:'none',borderRadius:7,color:'#fff',padding:'6px 9px',fontSize:13,cursor:'pointer',flexShrink:0}}>📍</button>
+                  </div>
+                  {atandi&&<p style={{fontSize:10,color:'#15803d',fontWeight:600,marginTop:3,marginLeft:2}}>✅ {mkLokasyonlar[key]} lokasyonuna atandı</p>}
+                </div>
+              );})}
+            </div>
+          )}
+
+          {isAdmin&&<button onClick={malKabulOnayla} disabled={loading||itemList.length===0} style={{...S.btn,width:'100%',background:'#10b981',color:'#fff',opacity:loading?.6:1}}>{loading?'İşleniyor...':'✅ Tamamla ve Stoğa Al'}</button>}
+        </div>
+
+        {/* Lokasyon seçici modal */}
+        {lokPickerFor&&(
+          <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.5)',display:'flex',alignItems:'flex-end',justifyContent:'center',zIndex:400}}>
+            <div style={{background:'#fff',borderRadius:'20px 20px 0 0',width:'100%',maxWidth:500,maxHeight:'85vh',overflowY:'auto'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 16px',borderBottom:'1px solid #e2e8f0',position:'sticky',top:0,background:'#fff'}}>
+                <p style={{fontSize:14,fontWeight:700,color:'#0f172a'}}>📍 Lokasyon Seç</p>
+                <button onClick={()=>setLokPickerFor(null)} style={{background:'#f1f5f9',border:'none',borderRadius:8,padding:'6px 12px',fontSize:13,cursor:'pointer',fontWeight:600}}>Kapat</button>
+              </div>
+              <LokPicker onSelect={lok=>{setMkLokasyonlar(prev=>({...prev,[lokPickerFor]:lok}));setLokPickerFor(null);}}/>
+            </div>
+          </div>
         )}
       </div>
+    );
+  }
 
-      {/* Adjust Modal */}
-      {adjustProd && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.5)',
-          display:'flex', alignItems:'center', justifyContent:'center', zIndex:500 }}>
-          <div style={{ background:'#fff', borderRadius:16, padding:24,
-            width:'calc(100% - 48px)', maxWidth:360 }}>
-            <p style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>Stok Düzelt</p>
-            <p style={{ fontSize:12, color:'#64748b', marginBottom:16 }}>{adjustProd.urunAdi||adjustProd.ean}</p>
-            <input type="number" style={{ ...S.input, marginBottom:12 }}
-              placeholder="Yeni stok miktarı" value={adjustMiktar}
-              onChange={e => setAdjustMiktar(e.target.value)} autoFocus />
-            <div style={{ display:'flex', gap:10 }}>
-              <button onClick={() => setAdjustProd(null)}
-                style={{ ...S.btn, flex:1, background:'#f1f5f9', color:'#64748b' }}>İptal</button>
-              <button onClick={saveAdjust}
-                style={{ ...S.btn, flex:1, background:'#1e40af', color:'#fff' }}>Kaydet</button>
+  if(view==='vas_liste'){
+    const vasGroups={};
+    vasList.forEach(item=>{const sid=item.sessionId||'bilinmiyor';if(!vasGroups[sid])vasGroups[sid]={sessionInfo:item._sessionInfo,items:[]};vasGroups[sid].items.push(item);});
+    return(
+      <div>
+        <div style={{background:'#0f172a',padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
+          <button onClick={()=>setView('list')} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:13}}>←</button>
+          <div style={{flex:1}}><p style={{color:'#fff',fontWeight:700,fontSize:14}}>🏷️ VAS — Etiketleme Bekleyenler</p><p style={{color:'#94a3b8',fontSize:11}}>{vasList.length} ürün · {Object.keys(vasGroups).length} mal kabul</p></div>
+          <button onClick={loadVasItems} style={{background:'rgba(255,255,255,.1)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',cursor:'pointer',fontSize:12}}>↻</button>
+        </div>
+        <div style={{padding:16}}>
+          {vasList.length===0&&<div style={{textAlign:'center',padding:'48px 0',color:'#94a3b8'}}><p style={{fontSize:28,marginBottom:8}}>🏷️</p><p style={{fontSize:14,fontWeight:600}}>VAS'ta bekleyen ürün yok</p></div>}
+          {Object.entries(vasGroups).map(([sid,group])=>(
+            <div key={sid} style={{marginBottom:20}}>
+              {/* Grup başlığı */}
+              <div style={{background:'#7c3aed',borderRadius:'12px 12px 0 0',padding:'10px 14px',display:'flex',alignItems:'center',gap:10}}>
+                <div style={{flex:1}}>
+                  <p style={{color:'#fff',fontWeight:700,fontSize:13}}>📥 {group.sessionInfo?.sessionAdi||'Mal Kabul'} — {group.sessionInfo?.tarih||'Tarih bilinmiyor'}</p>
+                  <p style={{color:'rgba(255,255,255,.7)',fontSize:11}}>{group.sessionInfo?.baslatan||''} · {group.sessionInfo?.mkTur==='referansli'?'Referanslı':'Manuel'} · {group.items.length} ürün</p>
+                  <p style={{color:'rgba(255,255,255,.55)',fontSize:10,fontFamily:'monospace',marginTop:2}}>MK: {sid.slice(0,8)}{group.sessionInfo?.irsaliyeNo?` · İrsaliye: ${group.sessionInfo.irsaliyeNo}`:''}</p>
+                </div>
+                <span style={{background:'rgba(255,255,255,.2)',color:'#fff',borderRadius:20,padding:'3px 10px',fontSize:11,fontWeight:700}}>{group.items.length} kalem</span>
+                {isAdmin&&(
+                  <button onClick={()=>vasGrubuIptal(sid,group.items)}
+                    title="Tüm grubu VAS'tan çıkar"
+                    style={{background:'rgba(239,68,68,.8)',border:'none',borderRadius:8,color:'#fff',padding:'6px 10px',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>
+                    ✕ Grubu İptal
+                  </button>
+                )}
+              </div>
+              {/* Ürünler */}
+              <div style={{border:'1px solid #e2e8f0',borderTop:'none',borderRadius:'0 0 12px 12px',overflow:'hidden'}}>
+                {group.items.map((item,i)=>(
+                  <div key={item.id} style={{borderBottom:i<group.items.length-1?'1px solid #f1f5f9':'none'}}>
+                    <VasCard item={item} onSend={vasLokasyonaGonder} onRemove={isAdmin?vasUrunuCikar:null}/>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const aktifler=sessions.filter(s=>s.durum==='aktif');
+  const bitmisler=sessions.filter(s=>s.durum!=='aktif');
+  return(
+    <div>
+      <div style={{background:'#0f172a',padding:'14px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <p style={{color:'#fff',fontWeight:700,fontSize:16}}>📥 Mal Kabul</p>
+        <button onClick={()=>{loadVasItems();setView('vas_liste');}} style={{...S.btn,background:'#7c3aed',color:'#fff',padding:'7px 12px',fontSize:12}}>🏷️ VAS Listesi</button>
+      </div>
+      <div style={{padding:16}}>
+        {mkRef.length>0&&!activeSession&&(
+          <div style={{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:14,padding:'14px 16px',marginBottom:12}}>
+            <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:4}}>📋 {sessionAdi||'Yüklenmiş Referans Var'}</p>
+            <p style={{fontSize:12,color:'#64748b',marginBottom:10}}>{mkRef.length} kalem · {mkTur==='referansli'?'Referanslı':'Manuel'} — henüz sayım başlatılmadı</p>
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={()=>setView('mal_kabul')} style={{...S.btn,flex:1,background:'#1e40af',color:'#fff'}}>Devam Et →</button>
+              <button onClick={()=>{setMkRef([]);setMkTur('manuel');setSessionAdi('');clearSetupDraft();}} style={{...S.btn,background:'#fee2e2',color:'#ef4444',padding:'10px 12px'}}>✕ Sil</button>
             </div>
           </div>
-        </div>
-      )}
+        )}
+        <button onClick={()=>{const fromSession=!!activeSession;setActiveSession(null);setMkEntries([]);setVasItems({});setMkLokasyonlar({});if(fromSession){setMkRef([]);setMkTur('manuel');setSessionAdi('');clearSetupDraft();}else if(mkRef.length===0)setMkTur('manuel');setView('mal_kabul');}}
+          style={{...S.btn,width:'100%',background:'#7c3aed',color:'#fff',marginBottom:16}}>📥 Yeni Mal Kabul Başlat</button>
 
-      {hvzTransfer && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.5)',
-          display:'flex', alignItems:'center', justifyContent:'center', zIndex:500 }}>
-          <div style={{ background:'#fff', borderRadius:16, padding:24,
-            width:'calc(100% - 48px)', maxWidth:380 }}>
-            <p style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>📦 HVZ → Lokasyona Taşı</p>
-            <p style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>{hvzTransfer.urunAdi||hvzTransfer.ean}</p>
-            <p style={{ fontSize:11, color:'#94a3b8', fontFamily:'monospace', marginBottom:16 }}>Havuzda: {hvzTransfer.miktar} adet</p>
-            <p style={{ fontSize:11, fontWeight:600, color:'#475569', marginBottom:5 }}>Taşınacak adet</p>
-            <input type="number" style={{ ...S.input, marginBottom:12 }}
-              placeholder={`Max ${hvzTransfer.miktar}`} value={hvzTransferAdet}
-              onChange={e => setHvzTransferAdet(e.target.value)} />
-            <p style={{ fontSize:11, fontWeight:600, color:'#475569', marginBottom:5 }}>Hedef lokasyon</p>
-            <input style={{ ...S.input, marginBottom:16, fontFamily:'monospace' }}
-              placeholder="A109S013B" value={hvzTargetLok}
-              onChange={e => setHvzTargetLok(e.target.value.toUpperCase())} autoFocus />
-            <div style={{ display:'flex', gap:10 }}>
-              <button onClick={() => setHvzTransfer(null)}
-                style={{ ...S.btn, flex:1, background:'#f1f5f9', color:'#64748b' }}>İptal</button>
-              <button onClick={hvzLokasyonaTasi}
-                style={{ ...S.btn, flex:1, background:'#1e40af', color:'#fff' }}>Taşı →</button>
+        {aktifler.length>0&&<>
+          <p style={{fontSize:12,fontWeight:700,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:8}}>⏸ Devam Eden Mal Kabuller</p>
+          {aktifler.map(s=>{
+            const draft=readMkDraft(s.id);
+            const draftCounts=draft?.counts||s.draftCounts||{};
+            const refItems=s.referenceItems||[];
+            const scanned=refItems.reduce((a,r)=>{const key=String(r.ean||r.malzemeKodu||'').trim();return a+(draftCounts[key]||0);},0);
+            const total=refItems.reduce((a,r)=>a+(r.beklenenAdet||0),0);
+            const pct=total?Math.min(100,Math.floor(scanned/total*100)):0;
+            const tarih=s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||'';
+            const hasDraft=Object.keys(draftCounts).length>0;
+            return(
+              <div key={s.id} style={{...S.card,border:'1px solid #bfdbfe',background:'#eff6ff'}}>
+                <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                  <div>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:2}}>
+                      <p style={{fontSize:13,fontWeight:700,color:'#1e293b'}}>📥 {s.sessionAdi||( s.mkTur==='referansli'?'Referanslı':'Manuel')+' Mal Kabul'}</p>
+                      <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                        {hasDraft&&<span style={{background:'#fef3c7',color:'#d97706',borderRadius:6,padding:'2px 7px',fontSize:10,fontWeight:700}}>💾 Kaydedildi</span>}
+                        {refItems.length>0&&<span style={{fontSize:11,color:'#1d4ed8',fontWeight:600}}>%{pct}</span>}
+                      </div>
+                    </div>
+                    <p style={{fontSize:11,color:'#64748b'}}>{s.baslatan} · {tarih}{refItems.length>0?` · ${refItems.length} kalem`:''}</p>
+                    {refItems.length>0&&<div style={{marginTop:6,height:4,background:'#bfdbfe',borderRadius:2,overflow:'hidden'}}><div style={{height:'100%',width:`${pct}%`,background:'#1e40af',borderRadius:2}}/></div>}
+                  </div>
+                  <div style={{display:'flex',gap:8}}>
+                    <button onClick={()=>openSession(s)} style={{...S.btn,flex:1,background:'#1e40af',color:'#fff',padding:'9px 0',fontSize:13}}>Devam Et →</button>
+                    {isAdmin&&<button onClick={()=>deleteSession(s)}
+                      style={{...S.btn,background:'#fee2e2',color:'#ef4444',padding:'9px 12px',fontSize:13}}>🗑</button>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </>}
+        {bitmisler.length>0&&<>
+          <p style={{fontSize:12,fontWeight:600,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:8,marginTop:16}}>Tamamlanan</p>
+          {bitmisler.slice(0,10).map(s=>(
+            <div key={s.id} style={S.card}>
+              <p style={{fontSize:13,fontWeight:600,color:'#475569'}}>📥 {s.sessionAdi||( s.mkTur==='referansli'?'Referanslı':'Manuel')+' Mal Kabul'}</p>
+              <p style={{fontSize:11,color:'#94a3b8'}}>{s.baslatan} · {s.baslangic?.toDate?.()?.toLocaleDateString('tr-TR')||''}</p>
             </div>
-          </div>
-        </div>
-      )}
+          ))}
+        </>}
+        {sessions.length===0&&!loading&&<div style={{textAlign:'center',padding:'48px 0',color:'#94a3b8'}}><p style={{fontSize:32,marginBottom:8}}>📥</p><p style={{fontSize:14,fontWeight:600}}>Henüz mal kabul yok</p></div>}
+      </div>
+      {toast&&<Toast {...toast} onDone={()=>setToast(null)}/>}
+    </div>
+  );
+}
 
-      {toast && <Toast {...toast} onDone={() => setToast(null)} />}
+function VasCard({item,onSend,onRemove}){
+  const[lok,setLok]=useState('');const[showPicker,setShowPicker]=useState(false);
+  return(
+    <div style={{background:'#fff',padding:'14px 16px'}}>
+      <div style={{display:'flex',alignItems:'flex-start',gap:8,marginBottom:8}}>
+        <div style={{flex:1,minWidth:0}}>
+          <p style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:2}}>{item.urunAdi||item.ean}</p>
+          <p style={{fontSize:11,color:'#94a3b8',fontFamily:'monospace'}}>{item.malzemeKodu||item.ean} · {item.adet} adet</p>
+        </div>
+        {onRemove&&(
+          <button onClick={()=>onRemove(item)} title="VAS listesinden çıkar"
+            style={{flexShrink:0,background:'#fff1f2',border:'1px solid #fecaca',borderRadius:7,color:'#dc2626',padding:'4px 8px',fontSize:11,fontWeight:600,cursor:'pointer'}}>
+            ✕ Çıkar
+          </button>
+        )}
+      </div>
+      {!showPicker?(
+        <div style={{display:'flex',gap:8}}>
+          <input value={lok} onChange={e=>setLok(e.target.value.toUpperCase())} placeholder="Lokasyon"
+            style={{flex:1,padding:'8px 12px',border:'1px solid #e2e8f0',borderRadius:8,fontSize:13,outline:'none',fontFamily:'monospace'}}/>
+          <button onClick={()=>setShowPicker(true)} style={{background:'#f1f5f9',border:'none',borderRadius:8,padding:'8px 10px',cursor:'pointer',fontSize:13}}>📍</button>
+          <button onClick={()=>onSend(item,lok)} disabled={!lok}
+            style={{background:'#10b981',border:'none',borderRadius:8,color:'#fff',padding:'8px 14px',fontSize:13,fontWeight:600,cursor:'pointer',opacity:!lok?.5:1}}>
+            Gönder ✓
+          </button>
+        </div>
+      ):(
+        <LokPicker onSelect={l=>{setLok(l);setShowPicker(false);}}/>
+      )}
     </div>
   );
 }
