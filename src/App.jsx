@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from './contexts/AuthContext.jsx';
+import { DepoProvider } from './contexts/DepoContext.jsx';
 import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import SiparisKontrol from './pages/SiparisKontrol.jsx';
@@ -10,6 +11,8 @@ import YoneticiPanel from './pages/YoneticiPanel.jsx';
 import Stok from './pages/Stok.jsx';
 import MalKabul from './pages/MalKabul.jsx';
 import DosyaAraclari from './pages/DosyaAraclari.jsx';
+import Egitim from './pages/Egitim.jsx';
+import DepoTransfer from './pages/DepoTransfer.jsx';
 import Layout from './components/Layout.jsx';
 
 export default function App() {
@@ -40,12 +43,16 @@ export default function App() {
     dosya: DosyaAraclari,
     stok: Stok,
     yonetici: YoneticiPanel,
+    egitim: Egitim,
+    transfer: DepoTransfer,
   };
   const PageComponent = pages[page] || Dashboard;
 
   return (
-    <Layout page={page} navigate={navigate} profile={profile}>
-      <PageComponent navigate={navigate} params={pageParams} profile={profile} />
-    </Layout>
+    <DepoProvider>
+      <Layout page={page} navigate={navigate} profile={profile}>
+        <PageComponent navigate={navigate} params={pageParams} profile={profile} />
+      </Layout>
+    </DepoProvider>
   );
 }
