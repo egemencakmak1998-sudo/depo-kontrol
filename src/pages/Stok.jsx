@@ -76,13 +76,24 @@ function ProductRow({ p, isAdmin, onAdjust }) {
 export default function Stok() {
   const { user, profile } = useAuth();
   const { selectedDepo, depoInfo } = useDepo();
+  const isFull = depoInfo.full;
+
+  /* Depo bazlı stok sorgulama yardımcısı */
+  const getStockDocs = useCallback(async () => {
+    if (isMainDepo(selectedDepo)) {
+      const snap = await getDocs(collection(db, 'stock'));
+      return snap.docs.filter(d => !d.id.includes('_')); // Tuzla: plain EAN ID'ler
+    }
+    const snap = await getDocs(query(collection(db, 'stock'), where('depoId', '==', selectedDepo)));
+    return snap.docs;
+  }, [selectedDepo]);
   const isAdmin = profile?.role === 'admin';
 
-  const TABS = isAdmin
-    ? ['Raf Görünümü', 'Ürün Ara', 'Hareketler', 'Yönet']
-    : ['Raf Görünümü', 'Ürün Ara', 'Hareketler'];
+  const TABS = isFull
+    ? (isAdmin ? ['Raf Görünümü', 'Ürün Ara', 'Hareketler', 'Yönet'] : ['Raf Görünümü', 'Ürün Ara', 'Hareketler'])
+    : (isAdmin ? ['Ürün Ara', 'Hareketler', 'Yönet'] : ['Ürün Ara', 'Hareketler']);
 
-  const [tab, setTab] = useState('Raf Görünümü');
+  const [tab, setTab] = useState(isFull ? 'Raf Görünümü' : 'Ürün Ara');
   const [toast, setToast] = useState(null);
   const toast$ = (msg, type = 'info') => setToast({ msg, type, id: Date.now() });
 
@@ -90,28 +101,26 @@ export default function Stok() {
   const [stats, setStats] = useState({ cesit: 0, adet: 0 });
   const loadStats = useCallback(async () => {
     try {
-      const snap = await getDocs(collection(db, 'stock'));
+      const docs = await getStockDocs();
       let adet = 0;
-      snap.docs.forEach(d => {
-        adet += d.data().miktar || 0;
-      });
-      setStats({ cesit: snap.size, adet });
+      docs.forEach(d => { adet += d.data().miktar || 0; });
+      setStats({ cesit: docs.length, adet });
     } catch {}
-  }, []);
+  }, [getStockDocs]);
   useEffect(() => { loadStats(); }, [loadStats]);
 
   /* ── Export ── */
   const exportStok = async () => {
     try {
       toast$('Stok dışa aktarılıyor...', 'info');
-      const [stockSnap, prodSnap] = await Promise.all([
-        getDocs(collection(db, 'stock')),
+      const [stockDocs, prodSnap] = await Promise.all([
+        getStockDocs(),
         getDocs(collection(db, 'products')),
       ]);
       const prodMap = {};
       prodSnap.docs.forEach(d => { const p = d.data(); if (p.ean) prodMap[p.ean] = p; });
-      const stockData = stockSnap.docs
-        .map(d => ({ ean: d.id, ...d.data() }))
+      const stockData = stockDocs
+        .map(d => ({ ean: isMainDepo(selectedDepo) ? d.id : (d.data().ean || d.id.split('_').slice(1).join('_')), ...d.data() }))
         .sort((a, b) => (a.urunAdi || '').localeCompare(b.urunAdi || ''));
 
       // Sayfa 1: Özet
@@ -184,7 +193,7 @@ export default function Stok() {
     if (adet <= 0 || adet > hvzTransfer.miktar) { toast$(`Geçerli adet girin (1-${hvzTransfer.miktar})`, 'error'); return; }
     try {
       const now = Timestamp.now();
-      const sRef = doc(db,'stock',hvzTransfer.ean);
+      const sRef = doc(db,'stock',stokDocId(selectedDepo,hvzTransfer.ean));
       const sSnap = await getDoc(sRef);
       const data = sSnap.exists() ? sSnap.data() : { byLocation:{}, miktar:0 };
       const byLok = { ...(data.byLocation||{}) };
@@ -537,7 +546,7 @@ export default function Stok() {
         const prevByLok = stockMap[item.ean]?.byLocation || {};
         const newByLok = { ...prevByLok, [lok]: (prevByLok[lok]||0) + item.miktar };
         batch.set(doc(db,'stock',stokDocId(selectedDepo,item.ean)), {
-          ean:item.ean, miktar:next, urunAdi:item.urunAdi||'',
+          ean:item.ean, depoId:selectedDepo, miktar:next, urunAdi:item.urunAdi||'',
           malzemeKodu:item.malzemeKodu||'', byLocation:newByLok, sonGuncelleme:now
         }, {merge:true});
         movBatch.set(doc(collection(db,'stockMovements')), {
@@ -577,7 +586,7 @@ export default function Stok() {
       const found = snap.docs.map(d=>({id:d.id,...d.data()}))
         .find(p => (p.ean&&p.ean===q) || (p.malzemeKodu&&p.malzemeKodu.toLowerCase()===ql));
       if (found) {
-        const s = await getDoc(doc(db,'stock',found.ean||''));
+        const s = await getDoc(doc(db,'stock',stokDocId(selectedDepo,found.ean||'')));
         const stockData = s.exists() ? s.data() : {};
         setManualProd({...found, currentMiktar: stockData.miktar||0, byLocation: stockData.byLocation||{}});
       } else { setManualProd(null); }
@@ -609,8 +618,8 @@ export default function Stok() {
       const next = prev + delta;
       const newLokMiktar = prevLokMiktar + delta;
       const newByLok = { ...prevByLok, [lok]: newLokMiktar };
-      await setDoc(doc(db,'stock',manualProd.ean), {
-        ean:manualProd.ean, miktar:next,
+      await setDoc(doc(db,'stock',stokDocId(selectedDepo,manualProd.ean)), {
+        ean:manualProd.ean, depoId:selectedDepo, miktar:next,
         urunAdi:manualProd.urunAdi||'', malzemeKodu:manualProd.malzemeKodu||'',
         byLocation:newByLok, sonGuncelleme:now
       }, {merge:true});
@@ -618,7 +627,7 @@ export default function Stok() {
         tarih:now, tip: isGiris ? 'sevkiyat_manuel' : 'cikis_manuel',
         ean:manualProd.ean, malzemeKodu:manualProd.malzemeKodu||'', urunAdi:manualProd.urunAdi||'',
         miktar:delta, oncekiMiktar:prev, sonrakiMiktar:next,
-        lokasyon:lok, kaynak:'manuel',
+        lokasyon:lok, kaynak:'manuel', depoId:selectedDepo,
         yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
       });
       toast$(`${isGiris?'Giriş':'Çıkış'}: ${manualProd.urunAdi||manualProd.ean} ${prev} → ${next} ✓`,'success');
@@ -641,18 +650,18 @@ export default function Stok() {
       const now = Timestamp.now();
       const prev = adjustProd.miktar||0;
       // byLocation içindeki negatif kayıtları temizle
-      const stockSnap = await getDoc(doc(db,'stock',adjustProd.ean));
+      const stockSnap = await getDoc(doc(db,'stock',stokDocId(selectedDepo,adjustProd.ean)));
       const byLok = stockSnap.exists() ? (stockSnap.data().byLocation||{}) : {};
       const cleanByLok = Object.fromEntries(
         Object.entries(byLok).filter(([,m]) => m > 0)
       );
-      await setDoc(doc(db,'stock',adjustProd.ean), {
-        ean:adjustProd.ean, miktar:yeni,
+      await setDoc(doc(db,'stock',stokDocId(selectedDepo,adjustProd.ean)), {
+        ean:adjustProd.ean, depoId:selectedDepo, miktar:yeni,
         byLocation: cleanByLok,
         sonGuncelleme:now
       }, {merge:true});
       await addDoc(collection(db,'stockMovements'), {
-        tarih:now, tip:'duzeltme', ean:adjustProd.ean,
+        tarih:now, tip:'duzeltme', ean:adjustProd.ean, depoId:selectedDepo,
         malzemeKodu:adjustProd.malzemeKodu||'', urunAdi:adjustProd.urunAdi||'',
         miktar:yeni-prev, oncekiMiktar:prev, sonrakiMiktar:yeni,
         kaynak:'manuel_duzeltme', yapan:profile?.name||user?.email||'', yapanId:user?.uid||''
@@ -687,7 +696,7 @@ export default function Stok() {
       {/* Header */}
       <div style={{ background:'#0f172a', padding:'12px 16px', display:'flex',
         alignItems:'center', justifyContent:'space-between' }}>
-        <p style={{ color:'#fff', fontWeight:700, fontSize:16 }}>📦 Stok Yönetimi</p>
+        <p style={{ color:'#fff', fontWeight:700, fontSize:16 }}>{depoInfo.icon} Stok — {depoInfo.short}</p>
         <div style={{ display:'flex', gap:10, alignItems:'center' }}>
           <button onClick={exportStok}
             style={{ background:'#10b981', border:'none', borderRadius:8, color:'#fff',
