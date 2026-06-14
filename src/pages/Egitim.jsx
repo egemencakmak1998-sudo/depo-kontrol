@@ -306,10 +306,20 @@ export default function Egitim(){
               <video ref={videoRef} style={{width:'100%',maxHeight:180,objectFit:'cover'}} playsInline muted/>
             </div>
           )}
-          <label style={{...S.btn,background:'#f1f5f9',color:'#475569',display:'inline-block',cursor:'pointer',marginBottom:12}}>
-            📂 Excel Yükle
-            <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>{if(e.target.files[0])parseExcel(e.target.files[0]);e.target.value='';}}/>
-          </label>
+          <div style={{display:'flex',gap:8,marginBottom:12}}>
+            <label style={{...S.btn,background:'#f1f5f9',color:'#475569',display:'inline-block',cursor:'pointer'}}>
+              📂 Excel Yükle
+              <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>{if(e.target.files[0])parseExcel(e.target.files[0]);e.target.value='';}}/>
+            </label>
+            {itemList.length>0&&<button onClick={()=>{
+              const rows=[['EAN','Malzeme Kodu','Ürün Adı','Adet']];
+              itemList.forEach(([ean,v])=>rows.push([ean,v.malzemeKodu||'',v.urunAdi||'',v.adet]));
+              const wb=XLSX.utils.book_new();const ws=XLSX.utils.aoa_to_sheet(rows);
+              ws['!cols']=[{wch:16},{wch:16},{wch:40},{wch:10}];
+              XLSX.utils.book_append_sheet(wb,ws,'Egitim Cikis');
+              XLSX.writeFile(wb,`egitim_cikis_${new Date().toISOString().slice(0,10)}.xlsx`);
+            }} style={{...S.btn,background:'#10b981',color:'#fff'}}>⬇️ Excel</button>}
+          </div>
           {itemList.length===0&&<p style={{color:'#94a3b8',textAlign:'center',padding:'24px 0'}}>Henüz ürün eklenmedi</p>}
           {itemList.map(([ean,v],i)=>{
             const isLast=ean===lastScanned;
@@ -369,6 +379,12 @@ export default function Egitim(){
                   </div>
                   <button onClick={()=>{setActiveTr(t);setGeriItems({});setGeriLastScanned(null);setView('return');}}
                     style={{...S.btn,background:'#10b981',color:'#fff',fontSize:12}}>↩ Geri Al</button>
+                  <button onClick={()=>{
+                    const rows=[['EAN','Malzeme Kodu','Ürün Adı','Çıkış Adedi']];
+                    (t.items||[]).forEach(i=>rows.push([i.ean||'',i.malzemeKodu||'',i.urunAdi||'',i.cikisMiktar||0]));
+                    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Egitim');
+                    XLSX.writeFile(wb,`egitim_${(t.hedef||'').replace(/\s/g,'_')}.xlsx`);
+                  }} style={{...S.btn,background:'#f1f5f9',color:'#475569',fontSize:12}}>⬇️</button>
                 </div>
               </div>
             ))}
