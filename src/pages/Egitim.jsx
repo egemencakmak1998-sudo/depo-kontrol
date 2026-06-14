@@ -36,6 +36,49 @@ export default function Egitim(){
   const lastScannedRef=useRef(null);
   const geriLastRef=useRef(null);
 
+  // Camera scanning
+  const videoRef=useRef(null);const streamRef=useRef(null);const detRef=useRef(null);const rafRef=useRef(null);
+  const[camOn,setCamOn]=useState(false);const[camTarget,setCamTarget]=useState('cikis');// 'cikis' | 'geri'
+  const lockedBcRef=useRef('');const noBcFrameRef=useRef(0);const lastScanTsRef=useRef(0);
+  const scanFnRef=useRef(null);
+
+  const stopCam=useCallback(()=>{
+    if(rafRef.current)cancelAnimationFrame(rafRef.current);
+    if(streamRef.current)streamRef.current.getTracks().forEach(t=>t.stop());
+    streamRef.current=null;setCamOn(false);
+  },[]);
+
+  const startCam=useCallback(async(target)=>{
+    setCamTarget(target);
+    if(!('BarcodeDetector' in window)){toast$('Bu cihaz kamera barkod desteklemiyor','error');return;}
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1280}}});
+      streamRef.current=stream;
+      if(videoRef.current){videoRef.current.srcObject=stream;videoRef.current.play();}
+      detRef.current=new window.BarcodeDetector({formats:['ean_13','ean_8','code_128','code_39']});
+      setCamOn(true);
+      const loop=async()=>{
+        if(videoRef.current?.readyState>=2&&detRef.current){
+          const MISS_FRAMES=12;const SCAN_COOLDOWN=2000;
+          try{const res=await detRef.current.detect(videoRef.current);
+            if(!res.length){noBcFrameRef.current++;if(noBcFrameRef.current>=MISS_FRAMES)lockedBcRef.current='';}
+            else{noBcFrameRef.current=0;const bc=String(res[0].rawValue||'').trim();const now=Date.now();
+              if(bc&&bc!==lockedBcRef.current&&now-lastScanTsRef.current>=SCAN_COOLDOWN){
+                lockedBcRef.current=bc;lastScanTsRef.current=now;scanFnRef.current?.(bc);
+              }}}catch{}
+        }
+        rafRef.current=requestAnimationFrame(loop);
+      };
+      rafRef.current=requestAnimationFrame(loop);
+    }catch(e){toast$('Kamera hatası: '+e.message,'error');}
+  },[]);
+
+  useEffect(()=>{scanFnRef.current=(code)=>{
+    if(camTarget==='cikis')addBarcode(code);
+    else addGeriBarcode(code);
+  };},[camTarget]);
+  useEffect(()=>()=>stopCam(),[stopCam]);
+
   const loadProducts=useCallback(async()=>{
     const snap=await getDocs(collection(db,'products'));
     const m={};snap.docs.forEach(d=>{const p=d.data();if(p.ean)m[p.ean]=p;});
@@ -185,7 +228,14 @@ export default function Egitim(){
               placeholder="Barkod okutun → Enter" style={{...S.input,flex:1}}/>
             <button onClick={()=>{addGeriBarcode(geriBarInput);setGeriBarInput('');}}
               style={{...S.btn,background:'#1e40af',color:'#fff'}}>Ekle</button>
+            <button onClick={()=>camOn?stopCam():startCam('geri')}
+              style={{...S.btn,background:camOn&&camTarget==='geri'?'#ef4444':'#0f172a',color:'#fff'}}>{camOn&&camTarget==='geri'?'⏹':'📷'}</button>
           </div>
+          {camOn&&camTarget==='geri'&&(
+            <div style={{marginBottom:12,borderRadius:10,overflow:'hidden',background:'#000',maxHeight:180}}>
+              <video ref={videoRef} style={{width:'100%',maxHeight:180,objectFit:'cover'}} playsInline muted/>
+            </div>
+          )}
           {activeTr.items.map((item,i)=>{
             const geri=geriItems[item.ean]||0;
             const tam=geri>=item.cikisMiktar;
@@ -248,7 +298,14 @@ export default function Egitim(){
               placeholder="Barkod okutun → Enter" style={{...S.input,flex:1}}/>
             <button onClick={()=>{addBarcode(barInput);setBarInput('');}}
               style={{...S.btn,background:'#1e40af',color:'#fff'}}>Ekle</button>
+            <button onClick={()=>camOn?stopCam():startCam('cikis')}
+              style={{...S.btn,background:camOn&&camTarget==='cikis'?'#ef4444':'#0f172a',color:'#fff'}}>{camOn&&camTarget==='cikis'?'⏹':'📷'}</button>
           </div>
+          {camOn&&camTarget==='cikis'&&(
+            <div style={{marginBottom:12,borderRadius:10,overflow:'hidden',background:'#000',maxHeight:180}}>
+              <video ref={videoRef} style={{width:'100%',maxHeight:180,objectFit:'cover'}} playsInline muted/>
+            </div>
+          )}
           <label style={{...S.btn,background:'#f1f5f9',color:'#475569',display:'inline-block',cursor:'pointer',marginBottom:12}}>
             📂 Excel Yükle
             <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>{if(e.target.files[0])parseExcel(e.target.files[0]);e.target.value='';}}/>
