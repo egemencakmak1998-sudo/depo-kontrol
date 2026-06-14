@@ -932,6 +932,8 @@ export default function MalKabul() {
                     onChange={e=>{const lok=e.target.value.trim().toUpperCase();if(!lok)return;const n={...mkLokasyonlar};lokItemsList.forEach(i=>{n[i.ean||i.malzemeKodu]=lok;});setMkLokasyonlar(n);}}/>
                   <button onClick={()=>{const n={...mkLokasyonlar};lokItemsList.forEach(i=>{n[i.ean||i.malzemeKodu]='HVZ';});setMkLokasyonlar(n);}}
                     style={{background:'#fff7ed',border:'1px solid #fed7aa',borderRadius:7,color:'#c2410c',padding:'7px 12px',fontSize:12,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'}}>📦 HVZ</button>
+                  <button onClick={()=>{const n={...mkLokasyonlar};lokItemsList.forEach(i=>{delete n[i.ean||i.malzemeKodu];});setMkLokasyonlar(n);}}
+                    style={{background:'#fee2e2',border:'1px solid #fecaca',borderRadius:7,color:'#dc2626',padding:'7px 12px',fontSize:12,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'}}>✕ Temizle</button>
                 </div>
               </div>
               {lokItemsList.map((item,i)=>{
