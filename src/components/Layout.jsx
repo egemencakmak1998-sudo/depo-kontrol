@@ -7,7 +7,6 @@ const FULL_NAV = [
   { id:'iade',      label:'İade',         icon:'↩️' },
   { id:'sayim',     label:'Sayım',        icon:'🔢' },
   { id:'malkabul',  label:'Mal Kabul',    icon:'📥' },
-  { id:'egitim',    label:'Eğitim',       icon:'🎓' },
   { id:'transfer',  label:'Transfer',     icon:'🔄' },
   { id:'raporlar',  label:'Raporlar',     icon:'📊' },
 ];
