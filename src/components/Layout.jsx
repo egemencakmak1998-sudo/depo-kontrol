@@ -19,7 +19,7 @@ const MINI_NAV = [
 ];
 
 const C = {
-  sidebar: { width:220, background:'#0f172a', minHeight:'100vh', display:'flex', flexDirection:'column', position:'fixed', top:0, left:0, zIndex:100 },
+  sidebar: { width:220, background:'#0f172a', height:'100vh', display:'flex', flexDirection:'column', position:'fixed', top:0, left:0, zIndex:100, overflow:'hidden' },
   logo: { padding:'20px 16px', borderBottom:'1px solid rgba(255,255,255,.08)' },
   navItem: (active) => ({
     display:'flex', alignItems:'center', gap:10, padding:'11px 16px', margin:'2px 8px',
@@ -83,7 +83,7 @@ export default function Layout({ page, navigate, profile, children }) {
             ))}
           </div>
         </div>
-        <nav style={{ flex:1, paddingTop:8, overflowY:'auto' }}>
+        <nav style={{ flex:1, paddingTop:8, overflowY:'auto', minHeight:0 }}>
           {navItems.map(n => (
             <button key={n.id} style={C.navItem(page===n.id)} onClick={() => navigate(n.id)}>
               <span style={{ fontSize:16 }}>{n.icon}</span> {n.label}
