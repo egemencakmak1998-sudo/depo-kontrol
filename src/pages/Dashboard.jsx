@@ -3,6 +3,7 @@ import { collection, query, where, orderBy, limit, getDocs, Timestamp } from 'fi
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import { useDepo } from '../contexts/DepoContext.jsx';
+import * as XLSX from 'xlsx';
 
 const Card = ({ icon, label, value, sub, color, onClick }) => (
   <div onClick={onClick} style={{ background:'#fff', borderRadius:16, padding:'18px 16px', cursor: onClick?'pointer':'default', border:`2px solid ${color}20`, boxShadow:'0 1px 4px rgba(0,0,0,.06)', transition:'transform .15s', flex:1, minWidth:140 }}
@@ -123,6 +124,12 @@ export default function Dashboard({ navigate, profile }) {
                     </div>
                   ))}
                   <button onClick={()=>navigate('egitim')} style={{ width:'100%', marginTop:10, padding:'9px', border:'none', borderRadius:10, background:'#10b981', color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer' }}>↩ Geri Al</button>
+                  <button onClick={()=>{
+                    const rows=[['EAN','Malzeme Kodu','Ürün Adı','Çıkış Adedi']];
+                    (t.items||[]).forEach(i=>rows.push([i.ean||'',i.malzemeKodu||'',i.urunAdi||'',i.cikisMiktar||0]));
+                    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Egitim');
+                    XLSX.writeFile(wb,`egitim_${(t.hedef||'').replace(/\s/g,'_')}.xlsx`);
+                  }} style={{ width:'100%', marginTop:6, padding:'9px', border:'1px solid #e2e8f0', borderRadius:10, background:'#fff', color:'#475569', fontWeight:700, fontSize:13, cursor:'pointer' }}>⬇️ Excel Export</button>
                 </div>
               ))}
             </>
