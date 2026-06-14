@@ -406,18 +406,47 @@ export default function Stok() {
   /* ── HAREKETLER ── */
   const [hareketler, setHareketler] = useState([]);
   const [hareketLoading, setHareketLoading] = useState(false);
+  const [hareketFiltre, setHareketFiltre] = useState('all'); // all | mal_kabul | sevkiyat_excel | sevkiyat_manuel | cikis_manuel | vas_lokasyon | hvz_transfer
+  const [hareketLimit, setHareketLimit] = useState(100);
 
   const loadHareketler = useCallback(async () => {
     setHareketLoading(true);
     try {
       const snap = await getDocs(query(collection(db,'stockMovements'),
-        orderBy('tarih','desc'), limit(100)));
-      setHareketler(snap.docs.map(d => ({id:d.id,...d.data()})));
+        orderBy('tarih','desc'), limit(hareketLimit)));
+      // Depo filtresi: Tuzla → depoId yok veya tuzla, diğerleri → depoId eşleşmeli
+      const docs = snap.docs.map(d => ({id:d.id,...d.data()}));
+      const filtered = isMainDepo(selectedDepo)
+        ? docs.filter(d => !d.depoId || d.depoId === 'tuzla')
+        : docs.filter(d => d.depoId === selectedDepo);
+      setHareketler(filtered);
     } catch {}
     setHareketLoading(false);
-  }, []);
+  }, [hareketLimit, selectedDepo]);
 
   useEffect(() => { if (tab==='Hareketler') loadHareketler(); }, [tab, loadHareketler]);
+
+  const exportHareketler = () => {
+    const list = hareketFiltre === 'all' ? hareketler : hareketler.filter(h => h.tip === hareketFiltre);
+    if (list.length === 0) { toast$('Gösterilecek hareket yok', 'error'); return; }
+    const rows = [['Tarih', 'Saat', 'Tip', 'EAN', 'Malzeme Kodu', 'Ürün Adı', 'Miktar', 'Önceki', 'Sonraki', 'Lokasyon', 'Yapan', 'Kaynak']];
+    list.forEach(h => {
+      const d = h.tarih?.toDate?.();
+      rows.push([
+        d ? d.toLocaleDateString('tr-TR') : '',
+        d ? d.toLocaleTimeString('tr-TR', {hour:'2-digit',minute:'2-digit'}) : '',
+        tipLabel[h.tip] || h.tip || '',
+        h.ean || '', h.malzemeKodu || '', h.urunAdi || '',
+        h.miktar || 0, h.oncekiMiktar ?? '', h.sonrakiMiktar ?? '',
+        h.lokasyon || '', h.yapan || '', h.kaynak || ''
+      ]);
+    });
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{wch:12},{wch:8},{wch:16},{wch:16},{wch:16},{wch:36},{wch:8},{wch:8},{wch:8},{wch:14},{wch:16},{wch:20}];
+    XLSX.utils.book_append_sheet(wb, ws, 'Hareketler');
+    XLSX.writeFile(wb, `stok_hareketler_${depoInfo.short}_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
 
   /* ── YÖNETİM: KÖK STOK ── */
   const [impLoading, setImpLoading] = useState(false);
@@ -941,18 +970,43 @@ export default function Stok() {
         {/* ── HAREKETLER ── */}
         {tab==='Hareketler' && (
           <div style={S.card}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
               <p style={{ fontSize:12, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:1 }}>
-                Son 100 Hareket
+                Stok Hareketleri — {depoInfo.short}
               </p>
-              <button onClick={loadHareketler} style={{ ...S.btn, padding:'6px 12px', background:'#f1f5f9', color:'#64748b', fontSize:12 }}>↻ Yenile</button>
+              <div style={{display:'flex',gap:6}}>
+                <button onClick={exportHareketler} style={{ ...S.btn, padding:'6px 12px', background:'#10b981', color:'#fff', fontSize:12 }}>⬇️ Excel</button>
+                <button onClick={loadHareketler} style={{ ...S.btn, padding:'6px 12px', background:'#f1f5f9', color:'#64748b', fontSize:12 }}>↻</button>
+              </div>
+            </div>
+            {/* Filtre */}
+            <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:10}}>
+              {[['all','Tümü'],['mal_kabul','Mal Kabul'],['sevkiyat_excel','Sevkiyat'],['sevkiyat_manuel','Manuel Giriş'],['cikis_manuel','Manuel Çıkış'],['vas_lokasyon','VAS'],['hvz_transfer','HVZ Transfer']].map(([k,l])=>{
+                const count=k==='all'?hareketler.length:hareketler.filter(h=>h.tip===k).length;
+                if(k!=='all'&&count===0)return null;
+                return(<button key={k} onClick={()=>setHareketFiltre(k)}
+                  style={{border:'none',borderRadius:6,padding:'4px 10px',fontSize:11,fontWeight:600,cursor:'pointer',
+                    background:hareketFiltre===k?'#1e40af':'#f1f5f9',color:hareketFiltre===k?'#fff':'#475569'}}>
+                  {l} ({count})
+                </button>);
+              })}
+            </div>
+            {/* Limit */}
+            <div style={{display:'flex',gap:6,marginBottom:10}}>
+              {[50,100,300,500].map(n=>(
+                <button key={n} onClick={()=>setHareketLimit(n)}
+                  style={{border:'none',borderRadius:6,padding:'3px 8px',fontSize:10,fontWeight:600,cursor:'pointer',
+                    background:hareketLimit===n?'#e2e8f0':'transparent',color:'#64748b'}}>
+                  Son {n}
+                </button>
+              ))}
             </div>
             {hareketLoading ? (
               <p style={{ color:'#94a3b8', fontSize:13, textAlign:'center', padding:'20px 0' }}>Yükleniyor...</p>
             ) : hareketler.length===0 ? (
               <p style={{ color:'#94a3b8', fontSize:13, textAlign:'center', padding:'20px 0' }}>Henüz hareket yok</p>
             ) : (
-              hareketler.map((h,i) => (
+              (hareketFiltre==='all'?hareketler:hareketler.filter(h=>h.tip===hareketFiltre)).map((h,i) => (
                 <div key={i} style={{ display:'flex', alignItems:'center', gap:10,
                   padding:'8px 0', borderBottom:'1px solid #f1f5f9' }}>
                   <div style={{ background: tipColor[h.tip]||'#94a3b8', color:'#fff', borderRadius:6,
@@ -965,9 +1019,9 @@ export default function Stok() {
                       {h.urunAdi||h.ean}
                     </p>
                     <p style={{ fontSize:10, color:'#94a3b8' }}>
-                      {h.yapan} · {h.tarih?.toDate?.()?.toLocaleDateString('tr-TR')}
+                      {h.ean&&<span style={{fontFamily:'monospace'}}>{h.ean} · </span>}
+                      {h.yapan} · {h.tarih?.toDate?.()?.toLocaleDateString('tr-TR')} {h.tarih?.toDate?.()?.toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'})||''}
                       {h.lokasyon && <span style={{ marginLeft:6, color:'#3b82f6', fontWeight:600 }}>📍{h.lokasyon}</span>}
-                      {h.kaynak && <span style={{ marginLeft:6 }}>· {h.kaynak.replace('irsaliye:','İrsaliye: ')}</span>}
                     </p>
                     {h.malzemeKodu && (
                       <p style={{ fontSize:10, color:'#cbd5e1', fontFamily:'monospace' }}>{h.malzemeKodu}</p>
@@ -977,7 +1031,7 @@ export default function Stok() {
                     <p style={{ fontSize:13, fontWeight:700, color: (h.miktar||0)>=0?'#10b981':'#ef4444' }}>
                       {(h.miktar||0)>0?'+':''}{h.miktar}
                     </p>
-                    <p style={{ fontSize:10, color:'#94a3b8' }}>{h.oncekiMiktar}→{h.sonrakiMiktar}</p>
+                    <p style={{ fontSize:10, color:'#94a3b8' }}>{h.oncekiMiktar??''}→{h.sonrakiMiktar??''}</p>
                   </div>
                 </div>
               ))
