@@ -3,7 +3,7 @@ import { collection, addDoc, getDocs, doc, updateDoc, setDoc, deleteDoc,
          query, where, orderBy, Timestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
-import { useDepo, stokDocId } from '../contexts/DepoContext.jsx';
+import { useDepo, stokDocId, isMainDepo } from '../contexts/DepoContext.jsx';
 import * as XLSX from 'xlsx';
 
 /* ── localStorage ── */
@@ -532,14 +532,14 @@ export default function MalKabul() {
 
   const loadSessions=useCallback(async()=>{
     try{
-      // orderBy kaldırıldı — composite index gerekmeden çalışır, client-side sıralama yapılır
       const snap=await getDocs(query(collection(db,'countSessions'),where('tip','==','mal_kabul')));
       const list=snap.docs.map(d=>({id:d.id,...d.data()}));
       list.sort((a,b)=>(b.baslangic?.toMillis?.()??0)-(a.baslangic?.toMillis?.()??0));
       setSessions(list);
     }catch(e){console.error('loadSessions error:',e);}
   },[]);
-  useEffect(()=>{loadSessions();},[loadSessions]);
+  // Her sayfa açılışında ve depo değişiminde yenile
+  useEffect(()=>{loadSessions();},[loadSessions,selectedDepo]);
 
   useEffect(()=>{
     if(mkRef.length>0||sessionAdi) writeSetupDraft({mkTur,mkRef,sessionAdi});
@@ -714,7 +714,7 @@ export default function MalKabul() {
           }
         }
       }
-      const stockSnap=await getDocs(query(collection(db,'stock'),where('depoId','==',selectedDepo)));
+      const stockSnap=await getDocs(isMainDepo(selectedDepo)?collection(db,'stock'):query(collection(db,'stock'),where('depoId','==',selectedDepo)));
       const stockMap={};stockSnap.docs.forEach(d=>{stockMap[d.id]=d.data();});
       const batch=writeBatch(db);const movBatch=writeBatch(db);
       itemList.forEach(item=>{
@@ -731,7 +731,7 @@ export default function MalKabul() {
         const lok=mkLokasyonlar[item.ean]||mkLokasyonlar[item.malzemeKodu]||'HVZ';
         const prevByLok=stockMap[item.ean]?.byLocation||{};
         const newByLok={...prevByLok,[lok]:(prevByLok[lok]||0)+lokAdet};
-        batch.set(doc(db,'stock',stokDocId(selectedDepo,item.ean)),{ean:item.ean,miktar:next,urunAdi:item.urunAdi||'',malzemeKodu:item.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
+        batch.set(doc(db,'stock',stokDocId(selectedDepo,item.ean)),{ean:item.ean,depoId:selectedDepo,miktar:next,urunAdi:item.urunAdi||'',malzemeKodu:item.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
         movBatch.set(doc(collection(db,'stockMovements')),{tarih:now,tip:'mal_kabul',ean:item.ean,malzemeKodu:item.malzemeKodu||'',urunAdi:item.urunAdi||'',miktar:lokAdet,oncekiMiktar:prev,sonrakiMiktar:next,hasarliAdet:item.hasarliAdet||0,vasAdet,lokAdet,lokasyon:lok,kaynak:`mal_kabul:${activeSession.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
       });
       await batch.commit();await movBatch.commit();
@@ -777,7 +777,7 @@ export default function MalKabul() {
       const prevByLok=stockSnap.empty?{}:(stockSnap.docs[0].data().byLocation||{});
       const next=prev+vasItem.adet;
       const newByLok={...prevByLok,[lokasyon]:(prevByLok[lokasyon]||0)+vasItem.adet};
-      await setDoc(doc(db,'stock',stokDocId(selectedDepo,vasItem.ean)),{ean:vasItem.ean,miktar:next,urunAdi:vasItem.urunAdi||'',malzemeKodu:vasItem.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
+      await setDoc(doc(db,'stock',stokDocId(selectedDepo,vasItem.ean)),{ean:vasItem.ean,depoId:selectedDepo,miktar:next,urunAdi:vasItem.urunAdi||'',malzemeKodu:vasItem.malzemeKodu||'',byLocation:newByLok,sonGuncelleme:now},{merge:true});
       await updateDoc(doc(db,'vasItems',vasItem.id),{durum:'tamamlandi',lokasyon,bitis:now});
       await addDoc(collection(db,'stockMovements'),{tarih:now,tip:'vas_lokasyon',ean:vasItem.ean,malzemeKodu:vasItem.malzemeKodu||'',urunAdi:vasItem.urunAdi||'',miktar:vasItem.adet,oncekiMiktar:prev,sonrakiMiktar:next,lokasyon,kaynak:`vas:${vasItem.id}`,yapan:profile?.name||user?.email||'',yapanId:user?.uid||''});
       setVasList(prev=>prev.filter(v=>v.id!==vasItem.id));
