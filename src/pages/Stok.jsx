@@ -3,7 +3,7 @@ import { collection, getDocs, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc,
          query, where, orderBy, limit, writeBatch, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext.jsx';
-import { useDepo, stokDocId } from '../contexts/DepoContext.jsx';
+import { useDepo, stokDocId, isMainDepo } from '../contexts/DepoContext.jsx';
 import * as XLSX from 'xlsx';
 
 function Toast({ msg, type, onDone }) {
