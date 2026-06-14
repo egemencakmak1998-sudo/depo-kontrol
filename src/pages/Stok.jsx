@@ -414,13 +414,13 @@ export default function Stok() {
     try {
       const snap = await getDocs(query(collection(db,'stockMovements'),
         orderBy('tarih','desc'), limit(hareketLimit)));
-      // Depo filtresi: Tuzla → depoId yok veya tuzla, diğerleri → depoId eşleşmeli
       const docs = snap.docs.map(d => ({id:d.id,...d.data()}));
+      // Tuzla: depoId yok VEYA 'tuzla' — eski kayıtlar depoId içermez
       const filtered = isMainDepo(selectedDepo)
-        ? docs.filter(d => !d.depoId || d.depoId === 'tuzla')
+        ? docs.filter(d => !d.depoId || d.depoId === 'tuzla' || d.depoId === undefined)
         : docs.filter(d => d.depoId === selectedDepo);
       setHareketler(filtered);
-    } catch {}
+    } catch(e) { console.error('Hareketler yüklenemedi:',e); toast$('Hareketler yüklenemedi: '+e.message,'error'); }
     setHareketLoading(false);
   }, [hareketLimit, selectedDepo]);
 
