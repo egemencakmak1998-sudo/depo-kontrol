@@ -169,6 +169,8 @@ export default function Stok() {
   const [hvzTransferAdet, setHvzTransferAdet] = useState('');
 
   const rafKod = raf && kat ? `A${koridor}S${String(raf).padStart(3,'0')}${kat}` : null;
+  const [customLok, setCustomLok] = useState('');
+  const [customLokActive, setCustomLokActive] = useState(''); // aktif olarak yüklenen custom lokasyon
 
   const loadHvz = useCallback(async () => {
     setHvzLoading(true);
@@ -223,27 +225,61 @@ export default function Stok() {
   };
 
   const loadRaf = useCallback(async () => {
-    if (!rafKod) return;
+    const lok = customLokActive || rafKod;
+    if (!lok) return;
     setRafLoading(true);
     try {
-      const snap = await getDocs(query(collection(db,'products'),
-        where('locations','array-contains', rafKod)));
+      // Standart lokasyonlar: products.locations array-contains
+      const snap = await getDocs(query(collection(db,'products'), where('locations','array-contains', lok)));
       const prods = snap.docs.map(d => ({ id:d.id, ...d.data() }));
       const withStock = await Promise.all(prods.map(async p => {
         if (!p.ean) return { ...p, miktar:null, totalMiktar:null };
         const s = await getDoc(doc(db,'stock',stokDocId(selectedDepo,p.ean)));
         if (!s.exists()) return { ...p, miktar:null, totalMiktar:null };
         const data = s.data();
-        const lokMiktar = data.byLocation?.[rafKod] ?? null;
+        const lokMiktar = data.byLocation?.[lok] ?? null;
         const totalMiktar = data.miktar ?? null;
         return { ...p, miktar: lokMiktar !== null ? lokMiktar : totalMiktar, totalMiktar };
       }));
-      setRafProds(withStock.sort((a,b) => (a.urunAdi||'').localeCompare(b.urunAdi||'')));
+      // Ayrıca stock byLocation'da bu lokasyon olan ama products.locations'da olmayan ürünleri de bul
+      const stockDocs = await getStockDocs();
+      const extraProds = [];
+      const existingEans = new Set(prods.map(p=>p.ean).filter(Boolean));
+      stockDocs.forEach(d => {
+        const data = d.data();
+        const ean = data.ean || (isMainDepo(selectedDepo) ? d.id : d.id.split('_').slice(1).join('_'));
+        if (!existingEans.has(ean) && (data.byLocation?.[lok] ?? 0) > 0) {
+          extraProds.push({ ean, urunAdi:data.urunAdi||'', malzemeKodu:data.malzemeKodu||'', miktar:data.byLocation[lok], totalMiktar:data.miktar||0 });
+        }
+      });
+      setRafProds([...withStock, ...extraProds].sort((a,b) => (a.urunAdi||'').localeCompare(b.urunAdi||'')));
     } catch (e) { toast$('Hata: '+e.message,'error'); }
     setRafLoading(false);
-  }, [rafKod]);
+  }, [rafKod, customLokActive, getStockDocs, selectedDepo]);
 
-  useEffect(() => { if (rafKod) loadRaf(); }, [rafKod, loadRaf]);
+  useEffect(() => { if (rafKod || customLokActive) loadRaf(); }, [rafKod, customLokActive, loadRaf]);
+
+  const loadCustomLok = (lok) => {
+    const l = lok.trim().toUpperCase();
+    if (!l) return;
+    setCustomLokActive(l);
+    setRaf(null); setKat(null); // koridor picker'ı temizle
+  };
+
+  /* Raf görünümü Excel export */
+  const exportRafView = () => {
+    const lok = customLokActive || rafKod;
+    if (!lok || rafProds.length === 0) { toast$('Gösterilecek ürün yok', 'error'); return; }
+    const rows = [['EAN', 'Malzeme Kodu', 'Ürün Adı', 'Lokasyon Adedi', 'Toplam Stok', 'Lokasyon']];
+    rafProds.forEach(p => {
+      rows.push([p.ean||'', p.malzemeKodu||'', p.urunAdi||'', p.miktar||0, p.totalMiktar||0, lok]);
+    });
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{wch:16},{wch:16},{wch:40},{wch:12},{wch:12},{wch:14}];
+    XLSX.utils.book_append_sheet(wb, ws, 'Raf');
+    XLSX.writeFile(wb, `raf_${lok}_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
 
   /* ── ÜRÜN ARA ── */
   const [searchQ, setSearchQ] = useState('');
@@ -731,8 +767,22 @@ export default function Stok() {
         {/* ── RAF GÖRÜNÜMÜ ── */}
         {tab==='Raf Görünümü' && (
           <>
+            {/* Lokasyon arama */}
+            <div style={{...S.card, background:'#f8fafc'}}>
+              <p style={{fontSize:11,fontWeight:700,color:'#64748b',textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>Lokasyon Ara</p>
+              <div style={{display:'flex',gap:8}}>
+                <input value={customLok} onChange={e=>setCustomLok(e.target.value.toUpperCase())}
+                  onKeyDown={e=>{if(e.key==='Enter')loadCustomLok(customLok);}}
+                  placeholder="Lokasyon kodu yaz (örn: A109S013B)"
+                  style={{...S.input,flex:1,fontFamily:'monospace'}}/>
+                <button onClick={()=>loadCustomLok(customLok)}
+                  style={{...S.btn,background:'#1e40af',color:'#fff',whiteSpace:'nowrap'}}>🔍 Ara</button>
+              </div>
+              {customLokActive&&<p style={{fontSize:11,color:'#1e40af',fontWeight:600,marginTop:6}}>📍 {customLokActive} görüntüleniyor <button onClick={()=>{setCustomLokActive('');setCustomLok('');setRafProds([]);}} style={{background:'none',border:'none',color:'#dc2626',cursor:'pointer',fontSize:11,fontWeight:700}}>✕ Kapat</button></p>}
+            </div>
+
             {/* HVZ Havuz toggle */}
-            <button onClick={() => { const n=!hvzMode; setHvzMode(n); if(n){setRaf(null);setKat(null);loadHvz();} }}
+            <button onClick={() => { const n=!hvzMode; setHvzMode(n); if(n){setRaf(null);setKat(null);setCustomLokActive('');loadHvz();} }}
               style={{ ...S.btn, width:'100%', marginBottom:12, fontSize:14,
                 background: hvzMode?'#c2410c':'#fff7ed', color: hvzMode?'#fff':'#c2410c',
                 border: hvzMode?'none':'1px solid #fed7aa' }}>
@@ -822,10 +872,13 @@ export default function Stok() {
                 </div>
               </div>
             )}
-            {rafKod && (
+            {(rafKod || customLokActive) && (
               <div style={S.card}>
-                <p style={{ fontSize:12, fontWeight:700, color:'#64748b', marginBottom:2,
-                  textTransform:'uppercase', letterSpacing:1 }}>📍 {rafKod}</p>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:2}}>
+                  <p style={{ fontSize:12, fontWeight:700, color:'#64748b',
+                    textTransform:'uppercase', letterSpacing:1 }}>📍 {customLokActive || rafKod}</p>
+                  {rafProds.length>0&&<button onClick={exportRafView} style={{...S.btn,background:'#10b981',color:'#fff',padding:'6px 12px',fontSize:11}}>⬇️ Excel</button>}
+                </div>
                 {rafLoading ? (
                   <p style={{ color:'#94a3b8', fontSize:13, padding:'20px 0', textAlign:'center' }}>Yükleniyor...</p>
                 ) : rafProds.length === 0 ? (
